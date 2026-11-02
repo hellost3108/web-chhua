@@ -269,7 +269,8 @@ const DEFAULT_STATE = {
     sfxEnabled: true,
     smokeDensity: 1.0,
     autoSim: false,
-    autoSimIntervalMs: 9500
+    autoSimIntervalMs: 9500,
+    mockLiveEnabled: false
   },
   tiktok: {
     connected: false,
@@ -835,6 +836,73 @@ function extractUserFromEvent(data) {
   return { user, uniqueId, avatar };
 }
 
+function handleMemberEvent(data) {
+  const { user, uniqueId, avatar } = extractUserFromEvent(data);
+  recordDevotee(user, uniqueId, avatar, 1, 0, 0, 'Đã vào Chánh Điện lễ Phật');
+  broadcastNotification('temple.state', getPublicState());
+}
+
+function handleChatEvent(data) {
+  const { user, uniqueId, avatar } = extractUserFromEvent(data);
+  const commentText = data?.content || data?.comment || '';
+  console.log(`[TikTok Chat] ${user}: ${commentText}`);
+  parseViewerComment(commentText, user, uniqueId, avatar);
+}
+
+function handleLikeEvent(data) {
+  const { user, uniqueId, avatar } = extractUserFromEvent(data);
+  const likeCount = Math.min(15, Math.max(1, Number(data?.count ?? data?.likeCount ?? 1)));
+  Rituals.strikeWoodenFish({ user, uniqueId, avatar, count: likeCount });
+}
+
+function handleSocialEvent(data) {
+  const { user, uniqueId, avatar } = extractUserFromEvent(data);
+  Rituals.ringBell({
+    user,
+    uniqueId,
+    avatar,
+    count: 1,
+    wish: 'Hữu duyên tương ngộ nơi cửa Phật, cầu bình an may mắn',
+    readTts: false
+  });
+}
+
+function handleGiftEvent(data) {
+  const { user, uniqueId, avatar } = extractUserFromEvent(data);
+  const giftObj = data?.gift || data?.giftDetails || {};
+  const giftId = String(data?.giftId || giftObj?.id || 'rose');
+  const groupId = String(data?.groupId || `${uniqueId}_${giftId}`);
+  const repeatCount = Math.max(1, Number(data?.repeatCount || data?.comboCount || 1));
+
+  const prevCount = giftComboTracker.get(groupId) || 0;
+  if (repeatCount <= prevCount && data?.repeatEnd) {
+    giftComboTracker.delete(groupId);
+    return;
+  }
+  const deltaCount = Math.max(1, repeatCount - prevCount);
+  giftComboTracker.set(groupId, repeatCount);
+  if (giftComboTracker.size > 500) {
+    const firstKey = giftComboTracker.keys().next().value;
+    giftComboTracker.delete(firstKey);
+  }
+
+  const diamondCount = Math.max(1, Number(giftObj?.diamondCount || data?.diamondCount || 1));
+  const totalCoins = diamondCount * deltaCount;
+  const rawGiftName = giftObj?.name || data?.giftName || giftObj?.describe || 'Hoa Hồng Tâm Thành';
+  const displayGiftName = deltaCount > 1 ? `${deltaCount}x ${rawGiftName}` : rawGiftName;
+
+  console.log(`[TikTok Gift] ${user} gửi ${displayGiftName} (${totalCoins} xu)`);
+
+  Rituals.offerGift({
+    user,
+    uniqueId,
+    avatar,
+    coins: totalCoins,
+    giftName: displayGiftName,
+    wish: `Thành tâm dâng ${displayGiftName} kính lễ Đức Phật A Di Đà`
+  });
+}
+
 async function connectTikTokLive(usernameOrUrl) {
   const cleanUser = await resolveTikTokUsername(usernameOrUrl);
   if (!cleanUser) {
@@ -894,36 +962,9 @@ async function connectTikTokLive(usernameOrUrl) {
     }
   });
 
-  tiktokConn.on(WebcastEvent.MEMBER, (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    recordDevotee(user, uniqueId, avatar, 1, 0, 0, 'Đã vào Chánh Điện lễ Phật');
-    broadcastNotification('temple.state', getPublicState());
-  });
-
-  tiktokConn.on(WebcastEvent.CHAT, (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    const commentText = data?.content || data?.comment || '';
-    console.log(`[TikTok Chat] ${user}: ${commentText}`);
-    parseViewerComment(commentText, user, uniqueId, avatar);
-  });
-
-  tiktokConn.on(WebcastEvent.LIKE, (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    const likeCount = Math.min(15, Math.max(1, Number(data?.count ?? data?.likeCount ?? 1)));
-    Rituals.strikeWoodenFish({ user, uniqueId, avatar, count: likeCount });
-  });
-
-  const handleSocialEvent = (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    Rituals.ringBell({
-      user,
-      uniqueId,
-      avatar,
-      count: 1,
-      wish: 'Hữu duyên tương ngộ nơi cửa Phật, cầu bình an may mắn',
-      readTts: false
-    });
-  };
+  tiktokConn.on(WebcastEvent.MEMBER, handleMemberEvent);
+  tiktokConn.on(WebcastEvent.CHAT, handleChatEvent);
+  tiktokConn.on(WebcastEvent.LIKE, handleLikeEvent);
   tiktokConn.on(WebcastEvent.FOLLOW, handleSocialEvent);
   tiktokConn.on(WebcastEvent.SHARE, handleSocialEvent);
   tiktokConn.on(WebcastEvent.SOCIAL, (data) => {
@@ -933,42 +974,7 @@ async function connectTikTokLive(usernameOrUrl) {
       handleSocialEvent(data);
     }
   });
-
-  tiktokConn.on(WebcastEvent.GIFT, (data) => {
-    const { user, uniqueId, avatar } = extractUserFromEvent(data);
-    const giftObj = data?.gift || data?.giftDetails || {};
-    const giftId = String(data?.giftId || giftObj?.id || 'rose');
-    const groupId = String(data?.groupId || `${uniqueId}_${giftId}`);
-    const repeatCount = Math.max(1, Number(data?.repeatCount || data?.comboCount || 1));
-
-    const prevCount = giftComboTracker.get(groupId) || 0;
-    if (repeatCount <= prevCount && data?.repeatEnd) {
-      giftComboTracker.delete(groupId);
-      return;
-    }
-    const deltaCount = Math.max(1, repeatCount - prevCount);
-    giftComboTracker.set(groupId, repeatCount);
-    if (giftComboTracker.size > 500) {
-      const firstKey = giftComboTracker.keys().next().value;
-      giftComboTracker.delete(firstKey);
-    }
-
-    const diamondCount = Math.max(1, Number(giftObj?.diamondCount || data?.diamondCount || 1));
-    const totalCoins = diamondCount * deltaCount;
-    const rawGiftName = giftObj?.name || data?.giftName || giftObj?.describe || 'Hoa Hồng Tâm Thành';
-    const displayGiftName = deltaCount > 1 ? `${deltaCount}x ${rawGiftName}` : rawGiftName;
-
-    console.log(`[TikTok Gift] ${user} gửi ${displayGiftName} (${totalCoins} xu)`);
-
-    Rituals.offerGift({
-      user,
-      uniqueId,
-      avatar,
-      coins: totalCoins,
-      giftName: displayGiftName,
-      wish: `Thành tâm dâng ${displayGiftName} kính lễ Đức Phật A Di Đà`
-    });
-  });
+  tiktokConn.on(WebcastEvent.GIFT, handleGiftEvent);
 
   try {
     const roomState = await tiktokConn.connect();
@@ -998,6 +1004,108 @@ function disconnectTikTokLive() {
   state.tiktok.viewerCount = 0;
   broadcastNotification('temple.state', getPublicState());
   return state.tiktok;
+}
+
+// ============================================================================
+// 5B. MOCK LIVE — GIẢ LẬP SỰ KIỆN TIKTOK ĐỂ KIỂM THỬ (KHÔNG KẾT NỐI MẠNG THẬT)
+//     Dùng chung đúng các hàm xử lý (handleChatEvent/handleLikeEvent/
+//     handleGiftEvent/handleSocialEvent/handleMemberEvent) với kết nối LIVE
+//     thật ở trên, để test đúng pipeline (kể cả logic chống trùng combo gift).
+//     Người dùng mock luôn có tiền tố "[MOCK]" + uniqueId "mock_*" để KHÔNG
+//     bao giờ bị nhầm là tương tác thực từ người xem TikTok thật.
+// ============================================================================
+const MOCK_VIEWER_POOL = [
+  { uniqueId: 'mock_an_nhien_88', nickname: 'An Nhiên' },
+  { uniqueId: 'mock_minh_tam_vn', nickname: 'Minh Tâm' },
+  { uniqueId: 'mock_dieu_huong', nickname: 'Diệu Hương' },
+  { uniqueId: 'mock_thien_phuc', nickname: 'Thiện Phúc' },
+  { uniqueId: 'mock_hoa_sen_vang', nickname: 'Hoa Sen Vàng' }
+];
+const MOCK_COMMENTS = [
+  'con xin thắp hương cầu bình an',
+  'nam mô a di đà phật, cầu gia đạo an lành',
+  'cho con xin xăm đầu năm ạ',
+  'thỉnh chuông cầu may mắn cho cả nhà',
+  'gõ mõ tụng kinh hồi hướng công đức'
+];
+const MOCK_GIFTS = [
+  { name: 'Hoa Hồng Tâm Thành', diamondCount: 1 },
+  { name: 'Đèn Lưu Ly Trí Tuệ', diamondCount: 5 },
+  { name: 'Mâm Ngũ Quả Cát Tường', diamondCount: 20 },
+  { name: 'Đại Lễ Kim Long', diamondCount: 150 }
+];
+
+function pickMockViewer() {
+  return MOCK_VIEWER_POOL[Math.floor(Math.random() * MOCK_VIEWER_POOL.length)];
+}
+
+function buildMockEventData(viewer, extra = {}) {
+  // Lưu ý: tên hiển thị đi qua sanitizeUserName() — ký tự ngoặc vuông/tròn sẽ bị
+  // bộ lọc chống spam coi là mã emote và xóa mất, nên dùng tiền tố "MOCK_" (gạch
+  // dưới, nằm trong bảng ký tự cho phép) để nhãn mock luôn hiển thị nguyên vẹn.
+  return {
+    user: { nickname: `MOCK_${viewer.nickname}`, uniqueId: viewer.uniqueId, profilePictureUrl: '' },
+    uniqueId: viewer.uniqueId,
+    ...extra
+  };
+}
+
+function mockLiveEvent(type, params = {}) {
+  const viewer = MOCK_VIEWER_POOL.find((v) => v.uniqueId === params.uniqueId) || pickMockViewer();
+  switch (type) {
+    case 'member':
+      handleMemberEvent(buildMockEventData(viewer));
+      return { ok: true, type, viewer: viewer.uniqueId };
+    case 'chat': {
+      const content = params.comment || MOCK_COMMENTS[Math.floor(Math.random() * MOCK_COMMENTS.length)];
+      handleChatEvent(buildMockEventData(viewer, { content }));
+      return { ok: true, type, viewer: viewer.uniqueId, comment: content };
+    }
+    case 'like': {
+      const count = params.count || 1 + Math.floor(Math.random() * 10);
+      handleLikeEvent(buildMockEventData(viewer, { count }));
+      return { ok: true, type, viewer: viewer.uniqueId, count };
+    }
+    case 'follow':
+    case 'share':
+      handleSocialEvent(buildMockEventData(viewer));
+      return { ok: true, type, viewer: viewer.uniqueId };
+    case 'gift': {
+      const giftPick = MOCK_GIFTS[Math.floor(Math.random() * MOCK_GIFTS.length)];
+      const groupId = params.groupId || `mockgroup_${viewer.uniqueId}`;
+      const repeatCount = params.repeatCount || 1;
+      handleGiftEvent(buildMockEventData(viewer, {
+        groupId,
+        giftId: 'mock_gift',
+        gift: { name: giftPick.name, diamondCount: giftPick.diamondCount },
+        repeatCount,
+        repeatEnd: Boolean(params.repeatEnd)
+      }));
+      return { ok: true, type, viewer: viewer.uniqueId, groupId, repeatCount, repeatEnd: Boolean(params.repeatEnd) };
+    }
+    default:
+      throw new Error(`Loại sự kiện Mock Live không hợp lệ: ${type} (hợp lệ: member, chat, like, follow, share, gift)`);
+  }
+}
+
+let mockLiveTimer = null;
+function configureMockLive(enabled) {
+  state.settings.mockLiveEnabled = Boolean(enabled);
+  if (mockLiveTimer) {
+    clearInterval(mockLiveTimer);
+    mockLiveTimer = null;
+  }
+  if (state.settings.mockLiveEnabled) {
+    const EVENT_WEIGHTS = ['chat', 'chat', 'like', 'like', 'follow', 'gift', 'member'];
+    mockLiveTimer = setInterval(() => {
+      const type = EVENT_WEIGHTS[Math.floor(Math.random() * EVENT_WEIGHTS.length)];
+      try {
+        mockLiveEvent(type);
+      } catch (e) {
+        console.warn('[MockLive]', e.message);
+      }
+    }, 4000);
+  }
 }
 
 // ============================================================================
@@ -1087,6 +1195,13 @@ async function handleRpcCall(method, params = {}) {
       return disconnectTikTokLive();
     case 'live.setAutoSim':
       configureAutoSim(Boolean(params.enabled));
+      saveState();
+      broadcastNotification('temple.state', getPublicState());
+      return getPublicState();
+    case 'live.mockEvent':
+      return mockLiveEvent(params.type, params);
+    case 'live.setMockMode':
+      configureMockLive(Boolean(params.enabled));
       saveState();
       broadcastNotification('temple.state', getPublicState());
       return getPublicState();
