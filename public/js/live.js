@@ -154,9 +154,14 @@
 
   function renderCongregationHall(leaderboard = []) {
     if (!congregationHall) return;
-    // Những người xếp từ hạng 7 trở đi ngồi ở các vị trí đầu tiên cạnh thảm đỏ
+    // Những người xếp từ hạng 7 trở đi ngồi ở các vị trí đầu tiên cạnh thảm đỏ.
+    // Chỉ dựng lại DOM (và decode lại 40 ảnh Phật tử) khi danh sách TÊN/AVATAR hiển thị
+    // trên các thẻ tên thực sự thay đổi — khung này không hiển thị số công đức (giống
+    // renderVipCushions ở trên), nên dùng merit làm khóa sẽ vô tình render lại toàn bộ 40
+    // Phật tử mỗi khi AutoSim hoặc bất kỳ ai cộng thêm công đức (diễn ra liên tục mỗi ~9.5s
+    // hoặc mỗi nghi thức), gây giật khung hình / nhấp nháy trên toàn màn hình chánh điện.
     const hallViewers = leaderboard.slice(6);
-    const sig = JSON.stringify(hallViewers.map((d) => `${d.name}:${d.merit}`));
+    const sig = JSON.stringify(hallViewers.map((d) => `${d.name}:${d.avatar || ''}`));
     if (sig === lastRenderedLeaderboardJson && congregationHall.children.length > 0) return;
     lastRenderedLeaderboardJson = sig;
 
@@ -308,6 +313,15 @@
     playThreeBowsSequence(2050);
   }
 
+  // Lưu lại timer của hiệu ứng hào quang/cột sáng để huỷ timer cũ trước khi đặt timer mới.
+  // Nếu không huỷ, hai nghi thức xảy ra gần nhau (vd: AutoSim + người xem thật cùng lúc,
+  // hoặc Đại Lễ Kim Long gọi liên tiếp nhiều nghi thức) sẽ có timer CŨ tắt hào quang giữa
+  // lúc hào quang của nghi thức MỚI đang cần sáng, gây tượng Phật/hào quang nhấp nháy tắt
+  // rồi bật lại bất thường ngay trên khuôn mặt và tay Đức Phật.
+  let beamIntenseTimer = null;
+  let haloFlareTimer = null;
+  let lotusFlareTimer = null;
+
   function updateCentralWorshipper(user, avatar, actionLabel, wish, doThreeBows = true) {
     const nameEl = document.getElementById('centralName');
     const actEl = document.getElementById('centralAction');
@@ -335,18 +349,21 @@
     }
     if (beam) {
       beam.classList.add('intense');
-      setTimeout(() => beam.classList.remove('intense'), 4500);
+      clearTimeout(beamIntenseTimer);
+      beamIntenseTimer = setTimeout(() => beam.classList.remove('intense'), 4500);
     }
 
     const haloSys = document.getElementById('buddhaHaloSystem');
     const lotusHand = document.getElementById('lotusHandHalo');
     if (haloSys) {
       haloSys.classList.add('flare');
-      setTimeout(() => haloSys.classList.remove('flare'), 3600);
+      clearTimeout(haloFlareTimer);
+      haloFlareTimer = setTimeout(() => haloSys.classList.remove('flare'), 3600);
     }
     if (lotusHand) {
       lotusHand.classList.add('flare');
-      setTimeout(() => lotusHand.classList.remove('flare'), 3600);
+      clearTimeout(lotusFlareTimer);
+      lotusFlareTimer = setTimeout(() => lotusHand.classList.remove('flare'), 3600);
     }
     particles.spawnBellWave(540, 260, 2);
 
