@@ -130,7 +130,7 @@
   <div class="container">
     <header class="top-bar">
       <div>
-        <div class="top-title">🪷 BẢNG ĐIỀU KHIỂN CHÙA ONLINE TIKTOK LIVE RPC (BUN.JS + ZEROTTS MAI CHI)</div>
+        <div class="top-title">🪷 BẢNG ĐIỀU KHIỂN CHÙA ONLINE TIKTOK LIVE RPC (NODE.JS + ZEROTTS MAI CHI)</div>
         <div class="top-sub" id="statusBanner">Đang tải trạng thái hệ thống...</div>
       </div>
       <div class="top-links">
@@ -187,6 +187,33 @@
         <h2>🔌 4. Nhật Ký Phản Hồi JSON-RPC 2.0 (`/rpc`)</h2>
         <pre id="rpcOutput">{ "status": "Sẵn sàng nhận lệnh JSON-RPC 2.0" }</pre>
       </section>
+
+      <section class="card">
+        <h2>🛠️ 5. Vận Hành & Giám Sát</h2>
+        <div id="healthSummary" style="font-size: 13px; color: var(--muted); line-height: 1.8;">Đang tải...</div>
+        <div class="row">
+          <button class="btn" id="btnToggleInteractions">⏸️ Tạm Dừng Tương Tác Người Xem</button>
+          <button class="btn" id="btnRestartTts">🔁 Khởi Động Lại ZeroTTS Worker</button>
+        </div>
+        <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">📋 Nhật ký lỗi gần nhất (tối đa 20 dòng)</div>
+        <pre id="errorLogOutput" style="max-height:140px;">(chưa có lỗi nào)</pre>
+      </section>
+
+      <section class="card">
+        <h2>🧪 6. Mock Live — Giả Lập Sự Kiện TikTok (không kết nối mạng thật)</h2>
+        <p style="font-size: 13px; color: var(--muted);">
+          Dùng đúng pipeline xử lý sự kiện của TikTok LIVE thật (chat/like/gift/follow/member) nhưng hoàn toàn offline — an toàn để test. Người dùng mock luôn có tiền tố <code>MOCK_</code> để không lẫn với người xem thật.
+        </p>
+        <div class="action-grid">
+          <button class="btn" onclick="sendMock('member')">🙋 Mock: Vào phòng</button>
+          <button class="btn" onclick="sendMock('chat')">💬 Mock: Bình luận</button>
+          <button class="btn" onclick="sendMock('like')">❤️ Mock: Thả tim</button>
+          <button class="btn" onclick="sendMock('follow')">➕ Mock: Follow</button>
+          <button class="btn" onclick="sendMock('gift')">🎁 Mock: Tặng quà</button>
+          <button class="btn" id="btnMockCombo">🎁🎁🎁 Mock: Combo Gift x3</button>
+        </div>
+        <button class="btn gold" id="btnToggleMockLive">▶️ Bật Mock Live Tự Động (1 sự kiện/~4s)</button>
+      </section>
     </div>
   </div>
 
@@ -230,14 +257,58 @@
       }
     };
 
+    let interactionsEnabled = true;
+    let mockLiveEnabled = false;
+
     async function refreshStatus() {
       const res = await fetch('/api/state');
       const st = await res.json();
       document.getElementById('statusBanner').textContent =
         `Hương đã thắp: ${st.totalIncense} | Tổng Công Đức: ${st.totalMerit} | ZeroTTS: ${st.tts?.status} (Giọng: ${st.tts?.voice})`;
+
+      const h = st.health || {};
+      const uptimeMin = Math.floor((h.uptimeSec || 0) / 60);
+      document.getElementById('healthSummary').innerHTML = [
+        `⏱️ Thời gian chạy: <strong>${uptimeMin} phút</strong>`,
+        `🔌 Số client WebSocket đang kết nối: <strong>${h.wsClients ?? 0}</strong>`,
+        `🙏 Số thí chủ đã ghi nhận: <strong>${h.devoteeCount ?? 0}</strong>`,
+        `🎙️ ZeroTTS — đang chờ xử lý: <strong>${st.tts?.pendingRequests ?? 0}</strong> | lần tự khởi động lại: <strong>${st.tts?.restartAttempts ?? 0}</strong>`,
+        `🤝 Tương tác người xem: <strong>${st.settings?.interactionsEnabled !== false ? 'ĐANG BẬT' : 'ĐÃ TẠM DỪNG'}</strong>`,
+        `🧪 Mock Live tự động: <strong>${st.settings?.mockLiveEnabled ? 'ĐANG BẬT' : 'TẮT'}</strong>`
+      ].join('<br>');
+
+      interactionsEnabled = st.settings?.interactionsEnabled !== false;
+      document.getElementById('btnToggleInteractions').textContent =
+        interactionsEnabled ? '⏸️ Tạm Dừng Tương Tác Người Xem' : '▶️ Bật Lại Tương Tác Người Xem';
+
+      mockLiveEnabled = Boolean(st.settings?.mockLiveEnabled);
+      document.getElementById('btnToggleMockLive').textContent =
+        mockLiveEnabled ? '⏹️ Tắt Mock Live Tự Động' : '▶️ Bật Mock Live Tự Động (1 sự kiện/~4s)';
+
+      const errLog = st.errorLog || [];
+      document.getElementById('errorLogOutput').textContent = errLog.length
+        ? errLog.map((e) => `[${e.timestamp}] [${e.level}] [${e.scope}] ${e.message}`).join('\n')
+        : '(chưa có lỗi nào)';
     }
     refreshStatus();
     setInterval(refreshStatus, 4000);
+
+    document.getElementById('btnToggleInteractions').onclick = async () => {
+      await sendRpc('system.setInteractionsEnabled', { enabled: !interactionsEnabled });
+    };
+    document.getElementById('btnRestartTts').onclick = async () => {
+      await sendRpc('system.restartTts', {});
+    };
+    document.getElementById('btnToggleMockLive').onclick = async () => {
+      await sendRpc('live.setMockMode', { enabled: !mockLiveEnabled });
+    };
+    document.getElementById('btnMockCombo').onclick = async () => {
+      const groupId = `admin_combo_${Date.now()}`;
+      await sendRpc('live.mockEvent', { type: 'gift', uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 1 });
+      await sendRpc('live.mockEvent', { type: 'gift', uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 3 });
+      await sendRpc('live.mockEvent', { type: 'gift', uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 5, repeatEnd: true });
+    };
+    window.sendMock = (type) => sendRpc('live.mockEvent', { type });
   </script>
 </body>
 </html>

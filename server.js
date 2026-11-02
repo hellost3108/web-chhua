@@ -11,8 +11,34 @@ const PORT = process.env.PORT || 3000;
 const DATA_DIR = path.join(__dirname, 'data');
 const TTS_CACHE_DIR = path.join(DATA_DIR, 'tts-cache');
 const STATE_FILE = path.join(DATA_DIR, 'merit-state.json');
+const LOG_DIR = path.join(__dirname, 'logs');
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 fs.mkdirSync(TTS_CACHE_DIR, { recursive: true });
+fs.mkdirSync(LOG_DIR, { recursive: true });
+
+// ============================================================================
+// 0. LOGGING & NHẬT KÝ LỖI (hiển thị trên dashboard + ghi file logs/server-*.log)
+// ============================================================================
+const BOOT_TIME = Date.now();
+const errorLog = [];
+
+function logLine(level, scope, message) {
+  const line = `[${new Date().toISOString()}] [${level}] [${scope}] ${message}`;
+  if (level === 'ERROR' || level === 'WARN') {
+    console.warn(line);
+  } else {
+    console.log(line);
+  }
+  try {
+    const logFile = path.join(LOG_DIR, `server-${new Date().toISOString().slice(0, 10)}.log`);
+    fs.appendFile(logFile, line + '\n', () => {});
+  } catch (_) {}
+  if (level === 'ERROR' || level === 'WARN') {
+    errorLog.unshift({ id: `err_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`, timestamp: new Date().toISOString(), level, scope, message });
+    if (errorLog.length > 50) errorLog.length = 50;
+  }
+}
 
 // ============================================================================
 // 1. BỘ 18 QUẺ LINH XĂM CHÙA LINH ỨNG (FORTUNE STICKS DECK)
@@ -103,6 +129,8 @@ const FORTUNE_DECK = [
 // ============================================================================
 // 2. ZEROTTS PYTHON WORKER MANAGER (VOICE: MAI CHI)
 // ============================================================================
+const TTS_MAX_AUTO_RESTARTS = 3;
+
 class ZeroTTSManager {
   constructor() {
     this.proc = null;
@@ -115,7 +143,20 @@ class ZeroTTSManager {
     this.inflight = new Map();
     this.reqCounter = 0;
     this.buffer = '';
+    this.restartAttempts = 0;
+    this.shuttingDown = false;
     this.startWorker();
+  }
+
+  /** Khởi động lại thủ công (nút "Khởi động lại ZeroTTS" trên dashboard) — luôn reset bộ đếm, không bị chặn bởi giới hạn auto-restart. */
+  manualRestart() {
+    this.restartAttempts = 0;
+    if (this.proc) {
+      try { this.proc.kill(); } catch (_) {}
+    } else {
+      this.startWorker();
+    }
+    return this.getStatus();
   }
 
   resolvePythonBin() {
@@ -132,7 +173,7 @@ class ZeroTTSManager {
   startWorker() {
     const pyBin = this.resolvePythonBin();
     const scriptPath = path.join(__dirname, 'tts_worker.py');
-    console.log(`[ZeroTTS] Khởi chạy worker với ${pyBin} (Giọng mặc định: Mai Chi)...`);
+    logLine('INFO', 'ZeroTTS', `Khởi chạy worker với ${pyBin} (Giọng mặc định: Mai Chi)...`);
 
     this.status = 'loading';
     this.proc = spawn(pyBin, [scriptPath], {
@@ -156,14 +197,30 @@ class ZeroTTSManager {
     });
 
     this.proc.on('exit', (code) => {
-      console.warn(`[ZeroTTS] Worker thoát với mã ${code}`);
       this.ready = false;
-      this.status = 'stopped';
       for (const [, item] of this.pending) {
         clearTimeout(item.timer);
         item.resolve({ ok: false, error: 'ZeroTTS worker exited' });
       }
       this.pending.clear();
+
+      if (this.shuttingDown) {
+        this.status = 'stopped';
+        return;
+      }
+
+      if (this.restartAttempts < TTS_MAX_AUTO_RESTARTS) {
+        this.restartAttempts += 1;
+        const delayMs = this.restartAttempts * 5000;
+        this.status = 'restarting';
+        logLine('WARN', 'ZeroTTS', `Worker thoát với mã ${code}. Tự khởi động lại lần ${this.restartAttempts}/${TTS_MAX_AUTO_RESTARTS} sau ${delayMs / 1000}s...`);
+        broadcastNotification('tts.status', this.getStatus());
+        setTimeout(() => this.startWorker(), delayMs);
+      } else {
+        this.status = 'error';
+        logLine('ERROR', 'ZeroTTS', `Worker thoát với mã ${code}. Đã thử tự khởi động lại ${TTS_MAX_AUTO_RESTARTS} lần không thành công, DỪNG tự động retry (tránh vòng lặp vô hạn). Dùng nút "Khởi động lại ZeroTTS" trên dashboard Admin để thử lại thủ công.`);
+      }
+      broadcastNotification('tts.status', this.getStatus());
     });
   }
 
@@ -180,7 +237,8 @@ class ZeroTTSManager {
         this.voice = msg.voice || 'maichi';
         this.voices = msg.voices || ['maichi'];
         this.model = msg.model || this.model;
-        console.log(`[ZeroTTS] Sẵn sàng sau ${msg.loadSec}s! Giọng: ${this.voice} (${this.voices.join(', ')})`);
+        this.restartAttempts = 0; // worker khỏe mạnh trở lại -> reset bộ đếm retry liên tiếp
+        logLine('INFO', 'ZeroTTS', `Sẵn sàng sau ${msg.loadSec}s! Giọng: ${this.voice} (${this.voices.join(', ')})`);
         broadcastNotification('tts.status', this.getStatus());
       } else if (msg.type === 'result' && msg.id != null) {
         const entry = this.pending.get(msg.id);
@@ -190,7 +248,7 @@ class ZeroTTSManager {
           entry.resolve(msg);
         }
       } else if (msg.type === 'error') {
-        console.error('[ZeroTTS Error]', msg.error);
+        logLine('ERROR', 'ZeroTTS', String(msg.error));
         this.status = 'error';
         broadcastNotification('tts.status', this.getStatus());
       }
@@ -206,7 +264,9 @@ class ZeroTTSManager {
       engine: 'ZeroTTS (zeroweight-ai/ZeroTTS)',
       voice: state.settings.ttsVoice || this.voice || 'maichi',
       voices: this.voices,
-      model: this.model
+      model: this.model,
+      pendingRequests: this.pending.size,
+      restartAttempts: this.restartAttempts
     };
   }
 
@@ -270,7 +330,8 @@ const DEFAULT_STATE = {
     smokeDensity: 1.0,
     autoSim: false,
     autoSimIntervalMs: 9500,
-    mockLiveEnabled: false
+    mockLiveEnabled: false,
+    interactionsEnabled: true
   },
   tiktok: {
     connected: false,
@@ -451,7 +512,13 @@ function getPublicState() {
     recentEvents: state.recentEvents.slice(0, 15),
     settings: state.settings,
     tiktok: state.tiktok,
-    tts: zeroTts ? zeroTts.getStatus() : { ready: false, status: 'init', voice: 'maichi' }
+    tts: zeroTts ? zeroTts.getStatus() : { ready: false, status: 'init', voice: 'maichi' },
+    health: {
+      uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
+      wsClients: wss ? wss.clients.size : 0,
+      devoteeCount: Object.keys(state.devotees).length
+    },
+    errorLog: errorLog.slice(0, 20)
   };
 }
 
@@ -836,13 +903,22 @@ function extractUserFromEvent(data) {
   return { user, uniqueId, avatar };
 }
 
+// Cổng bật/tắt tương tác từ TikTok LIVE/Mock Live (dashboard Admin, mục "Vận Hành & Giám Sát").
+// Khi tắt: sự kiện người xem thật/mock bị bỏ qua hoàn toàn, nhưng RPC thao tác thủ công
+// từ Admin (gọi thẳng Rituals.*) vẫn hoạt động bình thường.
+function interactionsAreEnabled() {
+  return state.settings.interactionsEnabled !== false;
+}
+
 function handleMemberEvent(data) {
+  if (!interactionsAreEnabled()) return;
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   recordDevotee(user, uniqueId, avatar, 1, 0, 0, 'Đã vào Chánh Điện lễ Phật');
   broadcastNotification('temple.state', getPublicState());
 }
 
 function handleChatEvent(data) {
+  if (!interactionsAreEnabled()) return;
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const commentText = data?.content || data?.comment || '';
   console.log(`[TikTok Chat] ${user}: ${commentText}`);
@@ -850,12 +926,14 @@ function handleChatEvent(data) {
 }
 
 function handleLikeEvent(data) {
+  if (!interactionsAreEnabled()) return;
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const likeCount = Math.min(15, Math.max(1, Number(data?.count ?? data?.likeCount ?? 1)));
   Rituals.strikeWoodenFish({ user, uniqueId, avatar, count: likeCount });
 }
 
 function handleSocialEvent(data) {
+  if (!interactionsAreEnabled()) return;
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   Rituals.ringBell({
     user,
@@ -868,6 +946,7 @@ function handleSocialEvent(data) {
 }
 
 function handleGiftEvent(data) {
+  if (!interactionsAreEnabled()) return;
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const giftObj = data?.gift || data?.giftDetails || {};
   const giftId = String(data?.giftId || giftObj?.id || 'rose');
@@ -1205,6 +1284,17 @@ async function handleRpcCall(method, params = {}) {
       saveState();
       broadcastNotification('temple.state', getPublicState());
       return getPublicState();
+    case 'system.setInteractionsEnabled':
+      state.settings.interactionsEnabled = Boolean(params.enabled);
+      logLine('INFO', 'System', `Tương tác từ người xem ${state.settings.interactionsEnabled ? 'ĐƯỢC BẬT' : 'ĐÃ TẠM DỪNG'} qua dashboard Admin`);
+      saveState();
+      broadcastNotification('temple.state', getPublicState());
+      return getPublicState();
+    case 'system.restartTts':
+      logLine('INFO', 'System', 'Yêu cầu khởi động lại ZeroTTS worker thủ công từ dashboard Admin');
+      return zeroTts.manualRestart();
+    case 'system.getHealth':
+      return getPublicState().health;
     default:
       throw new Error(`Không tìm thấy phương thức JSON-RPC: ${method}`);
   }
@@ -1219,8 +1309,30 @@ app.use(express.json({ limit: '2mb' }));
 app.use('/tts-cache', express.static(TTS_CACHE_DIR, { maxAge: '7d' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.get('/admin', (_req, res) => {
+// Bảo vệ dashboard Admin bằng ADMIN_TOKEN (tùy chọn qua biến môi trường). Nếu
+// không đặt ADMIN_TOKEN, hành vi giữ nguyên như gốc (không yêu cầu đăng nhập) —
+// chỉ bật khi người vận hành chủ động muốn khóa trang Admin trước khi mở ra
+// ngoài localhost. Xem HUONG_DAN_VAN_HANH.md.
+app.get('/admin', (req, res) => {
+  if (ADMIN_TOKEN && req.query.token !== ADMIN_TOKEN) {
+    return res.status(401).send(
+      '<meta charset="utf-8"><body style="background:#120504;color:#f4c150;font-family:sans-serif;padding:40px">' +
+      '<h2>🔒 Cần token quản trị</h2>' +
+      '<p>Server đang bật ADMIN_TOKEN. Truy cập bằng: <code>/admin?token=...</code></p></body>'
+    );
+  }
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// Health check đơn giản cho công cụ giám sát bên ngoài (uptime monitor, PM2, v.v.)
+app.get('/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
+    tts: zeroTts ? zeroTts.status : 'init',
+    tiktokConnected: state.tiktok.connected,
+    wsClients: wss.clients.size
+  });
 });
 
 // HTTP JSON-RPC 2.0 Endpoint
@@ -1280,7 +1392,27 @@ function broadcastNotification(method, params) {
   }
 }
 
+// Heartbeat WebSocket (ping/pong mỗi 30s) — dọn các kết nối "chết" (ví dụ máy
+// client mất mạng đột ngột không kịp gửi gói đóng kết nối) để không rò rỉ bộ nhớ
+// khi chạy dài hạn 24/7.
+function wsHeartbeatTick() {
+  this.isAlive = true;
+}
+const wsHeartbeatInterval = setInterval(() => {
+  for (const ws of wss.clients) {
+    if (ws.isAlive === false) {
+      ws.terminate();
+      continue;
+    }
+    ws.isAlive = false;
+    ws.ping();
+  }
+}, 30000);
+
 wss.on('connection', (ws) => {
+  ws.isAlive = true;
+  ws.on('pong', wsHeartbeatTick);
+
   ws.send(
     JSON.stringify({
       jsonrpc: '2.0',
@@ -1340,3 +1472,59 @@ server.listen(PORT, () => {
     });
   }
 });
+
+// ============================================================================
+// 9. GRACEFUL SHUTDOWN (Ctrl+C / lệnh dừng dịch vụ) — lưu dữ liệu, đóng kết nối
+//    gọn gàng trước khi thoát, không để mất dữ liệu Bảng Vàng Công Đức.
+// ============================================================================
+let shuttingDown = false;
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logLine('INFO', 'System', `Nhận tín hiệu ${signal}, đang dừng dịch vụ an toàn...`);
+
+  clearInterval(wsHeartbeatInterval);
+  clearTimeout(saveTimer);
+
+  if (zeroTts) {
+    zeroTts.shuttingDown = true;
+    if (zeroTts.proc) {
+      try { zeroTts.proc.kill(); } catch (_) {}
+    }
+  }
+  if (tiktokConn) {
+    try { tiktokConn.disconnect(); } catch (_) {}
+  }
+  for (const ws of wss.clients) {
+    try { ws.close(1001, 'server_shutdown'); } catch (_) {}
+  }
+
+  const toSave = {
+    totalIncense: state.totalIncense,
+    totalMerit: state.totalMerit,
+    woodenFishHits: state.woodenFishHits,
+    bellRings: state.bellRings,
+    lanternCount: state.lanternCount,
+    fortuneCount: state.fortuneCount,
+    activeIncenseSticks: state.activeIncenseSticks,
+    offerings: state.offerings,
+    devotees: state.devotees,
+    settings: state.settings
+  };
+  try {
+    fs.writeFileSync(STATE_FILE, JSON.stringify(toSave, null, 2), 'utf8');
+    logLine('INFO', 'System', 'Đã lưu dữ liệu Bảng Vàng Công Đức trước khi thoát.');
+  } catch (e) {
+    logLine('ERROR', 'System', `Lỗi lưu dữ liệu lúc thoát: ${e.message}`);
+  }
+
+  server.close(() => {
+    logLine('INFO', 'System', 'Đã dừng dịch vụ.');
+    process.exit(0);
+  });
+  // Phòng khi server.close() treo quá lâu (kết nối còn mở) — vẫn thoát sau 5s.
+  setTimeout(() => process.exit(0), 5000).unref();
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));

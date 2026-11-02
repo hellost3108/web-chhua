@@ -613,10 +613,19 @@
   // 8. Kết nối JSON-RPC 2.0 WebSocket & Gửi Lệnh RPC
   let ws = null;
   let rpcId = 1;
+  // Tự phục hồi kết nối với backoff tăng dần (1s -> 2s -> 4s -> ... tối đa 15s)
+  // thay vì dồn dập thử lại mỗi 2s cố định, tránh làm nghẽn server khi mất mạng dài.
+  const WS_RECONNECT_BASE_MS = 1000;
+  const WS_RECONNECT_MAX_MS = 15000;
+  let wsReconnectAttempt = 0;
 
   function connectWebSocket() {
     const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     ws = new WebSocket(`${proto}//${window.location.host}/ws`);
+
+    ws.onopen = () => {
+      wsReconnectAttempt = 0; // kết nối thành công -> reset backoff
+    };
 
     ws.onmessage = (event) => {
       try {
@@ -638,7 +647,9 @@
     };
 
     ws.onclose = () => {
-      setTimeout(connectWebSocket, 2000);
+      const delay = Math.min(WS_RECONNECT_MAX_MS, WS_RECONNECT_BASE_MS * Math.pow(2, wsReconnectAttempt));
+      wsReconnectAttempt += 1;
+      setTimeout(connectWebSocket, delay);
     };
   }
   connectWebSocket();
