@@ -8,10 +8,13 @@ const { WebSocketServer } = require('ws');
 const { TikTokLiveConnection, WebcastEvent, ControlEvent } = require('tiktok-live-connector');
 
 const PORT = process.env.PORT || 3000;
-const DATA_DIR = path.join(__dirname, 'data');
+// DATA_DIR/LOG_DIR có thể ghi đè qua biến môi trường — CHỈ dùng để cô lập dữ liệu khi
+// chạy automated test (xem test/), tránh đụng vào data/merit-state.json hoặc logs/ thật
+// của người dùng. Khi không đặt biến, hành vi giữ nguyên như trước (dùng thư mục dự án).
+const DATA_DIR = process.env.DATA_DIR ? path.resolve(process.env.DATA_DIR) : path.join(__dirname, 'data');
 const TTS_CACHE_DIR = path.join(DATA_DIR, 'tts-cache');
 const STATE_FILE = path.join(DATA_DIR, 'merit-state.json');
-const LOG_DIR = path.join(__dirname, 'logs');
+const LOG_DIR = process.env.LOG_DIR ? path.resolve(process.env.LOG_DIR) : path.join(__dirname, 'logs');
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 
 fs.mkdirSync(TTS_CACHE_DIR, { recursive: true });
@@ -145,21 +148,42 @@ class ZeroTTSManager {
     this.buffer = '';
     this.restartAttempts = 0;
     this.shuttingDown = false;
+    this.manualRestartRequested = false;
+    this.downHandled = false;
+    this.restartTimer = null;
+    // Cờ môi trường chỉ dùng cho automated test (xem docs/PHASE_0X_*): bỏ qua việc
+    // khởi chạy worker Python (model ZeroTTS nặng ~GB RAM) khi chỉ cần test các luồng
+    // khác (gift combo, AutoSim, RPC dispatcher...). KHÔNG đặt biến này khi vận hành thật.
+    if (process.env.ZEROTTS_DISABLE === '1') {
+      this.status = 'disabled';
+      return;
+    }
     this.startWorker();
   }
 
-  /** Khởi động lại thủ công (nút "Khởi động lại ZeroTTS" trên dashboard) — luôn reset bộ đếm, không bị chặn bởi giới hạn auto-restart. */
+  /** Khởi động lại thủ công (nút "Khởi động lại ZeroTTS" trên dashboard) — luôn reset bộ đếm, không bị chặn bởi giới hạn auto-restart, và không bị trùng với 1 lần auto-restart đang chờ sẵn. */
   manualRestart() {
+    if (process.env.ZEROTTS_DISABLE === '1') return this.getStatus();
     this.restartAttempts = 0;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
     if (this.proc) {
+      this.manualRestartRequested = true;
       try { this.proc.kill(); } catch (_) {}
     } else {
+      this.manualRestartRequested = false;
       this.startWorker();
     }
     return this.getStatus();
   }
 
   resolvePythonBin() {
+    // Cho phép ghi đè đường dẫn Python qua biến môi trường — dùng để test khả năng
+    // chịu lỗi khi Python không tồn tại / sai đường dẫn (xem test Phase 3), và cũng
+    // hữu ích khi vận hành thật muốn chỉ định rõ python binary thay vì tự dò.
+    if (process.env.ZEROTTS_PYTHON_BIN) return process.env.ZEROTTS_PYTHON_BIN;
     const venvCandidates = [
       path.join(__dirname, '.venv', 'bin', 'python'),
       path.join(__dirname, '.venv', 'Scripts', 'python.exe')
@@ -176,12 +200,25 @@ class ZeroTTSManager {
     logLine('INFO', 'ZeroTTS', `Khởi chạy worker với ${pyBin} (Giọng mặc định: Mai Chi)...`);
 
     this.status = 'loading';
-    this.proc = spawn(pyBin, [scriptPath], {
-      cwd: __dirname,
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    this.buffer = '';
+    this.downHandled = false;
 
-    this.proc.stdout.on('data', (chunk) => {
+    let proc;
+    try {
+      proc = spawn(pyBin, [scriptPath], {
+        cwd: __dirname,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
+    } catch (err) {
+      // spawn() đồng bộ hiếm khi throw trực tiếp (lỗi khởi động thường báo qua event
+      // 'error' bên dưới), nhưng vẫn bắt phòng hờ để không bao giờ làm crash Node.js.
+      this.proc = null;
+      this._handleWorkerDown(`Không thể khởi chạy Python worker: ${err.message}`);
+      return;
+    }
+    this.proc = proc;
+
+    proc.stdout.on('data', (chunk) => {
       this.buffer += chunk.toString('utf8');
       let lines = this.buffer.split('\n');
       this.buffer = lines.pop() || '';
@@ -191,37 +228,73 @@ class ZeroTTSManager {
       }
     });
 
-    this.proc.stderr.on('data', (chunk) => {
+    proc.stderr.on('data', (chunk) => {
       const msg = chunk.toString('utf8').trim();
       if (msg) console.log(`[ZeroTTS stderr] ${msg}`);
     });
 
-    this.proc.on('exit', (code) => {
-      this.ready = false;
-      for (const [, item] of this.pending) {
-        clearTimeout(item.timer);
-        item.resolve({ ok: false, error: 'ZeroTTS worker exited' });
-      }
-      this.pending.clear();
-
-      if (this.shuttingDown) {
-        this.status = 'stopped';
-        return;
-      }
-
-      if (this.restartAttempts < TTS_MAX_AUTO_RESTARTS) {
-        this.restartAttempts += 1;
-        const delayMs = this.restartAttempts * 5000;
-        this.status = 'restarting';
-        logLine('WARN', 'ZeroTTS', `Worker thoát với mã ${code}. Tự khởi động lại lần ${this.restartAttempts}/${TTS_MAX_AUTO_RESTARTS} sau ${delayMs / 1000}s...`);
-        broadcastNotification('tts.status', this.getStatus());
-        setTimeout(() => this.startWorker(), delayMs);
-      } else {
-        this.status = 'error';
-        logLine('ERROR', 'ZeroTTS', `Worker thoát với mã ${code}. Đã thử tự khởi động lại ${TTS_MAX_AUTO_RESTARTS} lần không thành công, DỪNG tự động retry (tránh vòng lặp vô hạn). Dùng nút "Khởi động lại ZeroTTS" trên dashboard Admin để thử lại thủ công.`);
-      }
-      broadcastNotification('tts.status', this.getStatus());
+    // QUAN TRỌNG: bắt sự kiện 'error' của child process — nếu không có listener nào,
+    // Node.js coi đây là uncaughtException và crash toàn bộ server (ví dụ không tìm
+    // thấy Python trong PATH -> ENOENT, hoặc không có quyền thực thi -> EACCES).
+    proc.on('error', (err) => {
+      this._handleWorkerDown(`Lỗi khởi động Python worker (${err.code || 'error'}): ${err.message}`);
     });
+
+    proc.on('exit', (code, signal) => {
+      this._handleWorkerDown(`Worker thoát (mã ${code}${signal ? `, signal ${signal}` : ''})`);
+    });
+  }
+
+  /**
+   * Điểm xử lý DUY NHẤT khi worker không còn hoạt động, bất kể lý do là event 'error'
+   * (spawn thất bại) hay 'exit' (worker đã chạy rồi crash/tự thoát) — tránh xử lý 2 lần
+   * khi cả hai event cùng bắn ra cho một lần spawn thất bại, điều có thể gây lên lịch
+   * retry trùng lặp hoặc chạy 2 worker Python đồng thời.
+   */
+  _handleWorkerDown(reason) {
+    if (this.downHandled) return;
+    this.downHandled = true;
+    // Tiến trình (nếu có) đã chết/thất bại tại điểm này — bỏ tham chiếu để
+    // manualRestart() / các lần kiểm tra sau biết là KHÔNG còn worker nào đang sống,
+    // tránh gọi kill() vào một tiến trình đã chết (không làm gì, khiến restart "kẹt").
+    this.proc = null;
+
+    this.ready = false;
+    for (const [, item] of this.pending) {
+      clearTimeout(item.timer);
+      item.resolve({ ok: false, error: 'ZeroTTS worker exited' });
+    }
+    this.pending.clear();
+
+    if (this.shuttingDown) {
+      this.status = 'stopped';
+      return;
+    }
+
+    if (this.manualRestartRequested) {
+      this.manualRestartRequested = false;
+      this.status = 'restarting';
+      logLine('WARN', 'ZeroTTS', `${reason}. Khởi động lại thủ công theo yêu cầu từ dashboard Admin...`);
+      broadcastNotification('tts.status', this.getStatus());
+      this.startWorker();
+      return;
+    }
+
+    if (this.restartAttempts < TTS_MAX_AUTO_RESTARTS) {
+      this.restartAttempts += 1;
+      const delayMs = this.restartAttempts * 5000;
+      this.status = 'restarting';
+      logLine('WARN', 'ZeroTTS', `${reason}. Tự khởi động lại lần ${this.restartAttempts}/${TTS_MAX_AUTO_RESTARTS} sau ${delayMs / 1000}s...`);
+      broadcastNotification('tts.status', this.getStatus());
+      this.restartTimer = setTimeout(() => {
+        this.restartTimer = null;
+        this.startWorker();
+      }, delayMs);
+    } else {
+      this.status = 'error';
+      logLine('ERROR', 'ZeroTTS', `${reason}. Đã thử tự khởi động lại ${TTS_MAX_AUTO_RESTARTS} lần không thành công, DỪNG tự động retry (tránh vòng lặp vô hạn). Dùng nút "Khởi động lại ZeroTTS" trên dashboard Admin để thử lại thủ công.`);
+    }
+    broadcastNotification('tts.status', this.getStatus());
   }
 
   handleWorkerLine(line) {
@@ -497,6 +570,28 @@ function pushEventLog(evt) {
   return entry;
 }
 
+// recentEvents được gửi lại cho MỌI client qua broadcastNotification() trên MỌI sự kiện
+// nghi thức (đo thực tế: ~86% dung lượng mỗi gói WebSocket). Nhưng public/js/live.js chỉ
+// dùng recentEvents để hiển thị dòng tóm tắt ngắn trong "event feed" (formatEventSummary) —
+// không bao giờ đọc ttsText hay fortune.poem/meaning từ recentEvents (phần đó luôn đến từ
+// field `event` riêng của chính sự kiện mới nhất trong cùng broadcast, không đổi ở đây).
+// Vì vậy chỉ gửi đúng các field feed cần hiển thị, giảm đáng kể kích thước gói tin mà
+// không mất dữ liệu hay chức năng nào đang hoạt động.
+function summarizeEventForFeed(ev) {
+  const slim = {
+    id: ev.id,
+    timestamp: ev.timestamp,
+    type: ev.type,
+    user: ev.user,
+    merit: ev.merit
+  };
+  if (ev.count !== undefined) slim.count = ev.count;
+  if (ev.wish !== undefined) slim.wish = ev.wish;
+  if (ev.giftName !== undefined) slim.giftName = ev.giftName;
+  if (ev.fortune) slim.fortune = { number: ev.fortune.number, rank: ev.fortune.rank };
+  return slim;
+}
+
 function getPublicState() {
   return {
     totalIncense: state.totalIncense,
@@ -509,7 +604,7 @@ function getPublicState() {
     haloIntensity: state.haloIntensity,
     offerings: state.offerings,
     leaderboard: getLeaderboard(24),
-    recentEvents: state.recentEvents.slice(0, 15),
+    recentEvents: state.recentEvents.slice(0, 15).map(summarizeEventForFeed),
     settings: state.settings,
     tiktok: state.tiktok,
     tts: zeroTts ? zeroTts.getStatus() : { ready: false, status: 'init', voice: 'maichi' },
@@ -862,7 +957,31 @@ function parseViewerComment(commentText, user, uniqueId, avatar) {
   return Rituals.burnIncense({ user: cleanUser, uniqueId, avatar, count: 1, wish: cleanWish });
 }
 
+// Idempotency cho Gift Combo: mỗi groupId theo dõi { maxCount, ended, endedAt, lastSeen }.
+// - maxCount : repeatCount cao nhất đã được quy đổi công đức cho combo này.
+// - ended    : combo đã nhận sự kiện kết thúc (repeatEnd) hay chưa.
+// - endedAt  : thời điểm combo kết thúc — dùng để phân biệt sự kiện trùng/đến muộn của
+//              combo CŨ với một combo MỚI của cùng người xem, khi TikTok không cung cấp
+//              groupId riêng cho từng combo (phải dùng key dự phòng uniqueId+giftId).
+// - lastSeen : thời điểm cập nhật gần nhất, dùng để dọn các combo "treo" (không bao giờ
+//              nhận được repeatEnd, ví dụ do mất kết nối giữa combo) tránh rò rỉ bộ nhớ.
 const giftComboTracker = new Map();
+const GIFT_COMBO_FINALIZE_GRACE_MS = 3000; // chịu được trùng lặp/đến muộn trong khoảng này sau khi combo kết thúc
+const GIFT_COMBO_STALE_MS = 2 * 60 * 1000; // dọn combo không có cập nhật mới quá 2 phút
+
+const giftComboCleanupInterval = setInterval(() => {
+  const now = Date.now();
+  for (const [key, entry] of giftComboTracker) {
+    if (now - entry.lastSeen > GIFT_COMBO_STALE_MS) {
+      giftComboTracker.delete(key);
+    }
+  }
+}, 30000);
+
+function toPositiveInt(value, fallback) {
+  const n = Math.floor(Number(value));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
 
 async function resolveTikTokUsername(rawInput) {
   let input = String(rawInput || '').trim();
@@ -951,19 +1070,53 @@ function handleGiftEvent(data) {
   const giftObj = data?.gift || data?.giftDetails || {};
   const giftId = String(data?.giftId || giftObj?.id || 'rose');
   const groupId = String(data?.groupId || `${uniqueId}_${giftId}`);
-  const repeatCount = Math.max(1, Number(data?.repeatCount || data?.comboCount || 1));
+  const repeatCount = toPositiveInt(data?.repeatCount ?? data?.comboCount, 1);
+  const repeatEnd = Boolean(data?.repeatEnd);
+  const now = Date.now();
 
-  const prevCount = giftComboTracker.get(groupId) || 0;
-  if (repeatCount <= prevCount && data?.repeatEnd) {
-    giftComboTracker.delete(groupId);
-    return;
+  const prevEntry = giftComboTracker.get(groupId);
+  let deltaCount = 0;
+
+  if (!prevEntry) {
+    // Combo hoàn toàn mới (hoặc 1 quà đơn không nằm trong combo) -> ghi nhận từ đầu.
+    deltaCount = repeatCount;
+    giftComboTracker.set(groupId, { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now });
+  } else if (!prevEntry.ended) {
+    // Combo đang diễn ra (chưa kết thúc).
+    if (repeatCount > prevEntry.maxCount) {
+      deltaCount = repeatCount - prevEntry.maxCount;
+      prevEntry.maxCount = repeatCount;
+    }
+    // repeatCount <= maxCount: sự kiện trùng lặp hoặc đến muộn giữa combo -> KHÔNG cộng thêm.
+    if (repeatEnd) {
+      prevEntry.ended = true;
+      prevEntry.endedAt = now;
+    }
+    prevEntry.lastSeen = now;
+  } else if (now - prevEntry.endedAt <= GIFT_COMBO_FINALIZE_GRACE_MS) {
+    // Combo vừa kết thúc gần đây -> đây là sự kiện trùng lặp/đến muộn của CHÍNH combo đó.
+    if (repeatCount > prevEntry.maxCount) {
+      // Hiếm gặp: 1 sự kiện đến muộn báo count cao hơn mốc đã chốt -> cộng bù phần chênh lệch
+      // để không bỏ sót quà hợp lệ, rồi chốt lại mốc mới.
+      deltaCount = repeatCount - prevEntry.maxCount;
+      prevEntry.maxCount = repeatCount;
+    }
+    prevEntry.ended = true;
+    prevEntry.endedAt = now;
+    prevEntry.lastSeen = now;
+  } else {
+    // Đã quá thời gian ân hạn kể từ lúc combo trước kết thúc -> xem như một combo MỚI của
+    // cùng người xem (xảy ra khi TikTok không cung cấp groupId riêng cho mỗi combo).
+    deltaCount = repeatCount;
+    giftComboTracker.set(groupId, { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now });
   }
-  const deltaCount = Math.max(1, repeatCount - prevCount);
-  giftComboTracker.set(groupId, repeatCount);
+
   if (giftComboTracker.size > 500) {
     const firstKey = giftComboTracker.keys().next().value;
     giftComboTracker.delete(firstKey);
   }
+
+  if (deltaCount <= 0) return; // Không có đơn vị quà mới nào cần ghi công đức.
 
   const diamondCount = Math.max(1, Number(giftObj?.diamondCount || data?.diamondCount || 1));
   const totalCoins = diamondCount * deltaCount;
@@ -1153,14 +1306,18 @@ function mockLiveEvent(type, params = {}) {
       const giftPick = MOCK_GIFTS[Math.floor(Math.random() * MOCK_GIFTS.length)];
       const groupId = params.groupId || `mockgroup_${viewer.uniqueId}`;
       const repeatCount = params.repeatCount || 1;
+      // Cho phép truyền sẵn diamondCount (tùy chọn) để test tự động có thể kiểm chứng
+      // chính xác số công đức cộng dồn qua nhiều bước của 1 combo — nếu không truyền,
+      // giữ nguyên hành vi cũ (chọn ngẫu nhiên từ MOCK_GIFTS) cho các nút Mock trên Admin.
+      const diamondCount = params.diamondCount != null ? Number(params.diamondCount) : giftPick.diamondCount;
       handleGiftEvent(buildMockEventData(viewer, {
         groupId,
         giftId: 'mock_gift',
-        gift: { name: giftPick.name, diamondCount: giftPick.diamondCount },
+        gift: { name: giftPick.name, diamondCount },
         repeatCount,
         repeatEnd: Boolean(params.repeatEnd)
       }));
-      return { ok: true, type, viewer: viewer.uniqueId, groupId, repeatCount, repeatEnd: Boolean(params.repeatEnd) };
+      return { ok: true, type, viewer: viewer.uniqueId, groupId, repeatCount, diamondCount, repeatEnd: Boolean(params.repeatEnd) };
     }
     default:
       throw new Error(`Loại sự kiện Mock Live không hợp lệ: ${type} (hợp lệ: member, chat, like, follow, share, gift)`);
@@ -1464,8 +1621,12 @@ server.listen(PORT, () => {
   console.log(`🔌 JSON-RPC 2.0 Endpoint   : http://localhost:${PORT}/rpc (ws://localhost:${PORT}/ws)`);
   console.log(`============================================================`);
 
-  // Tự động kết nối tới @zenfacts_vn ngay khi khởi động server
-  const defaultChannel = process.env.TIKTOK_USER || state.tiktok?.username || 'zenfacts_vn';
+  // Tự động kết nối tới @zenfacts_vn ngay khi khởi động server.
+  // DISABLE_TIKTOK_AUTOCONNECT=1 chỉ dùng cho automated test (tránh gọi mạng TikTok thật
+  // mỗi lần test khởi động server) — KHÔNG đặt biến này khi vận hành thật.
+  const defaultChannel = process.env.DISABLE_TIKTOK_AUTOCONNECT === '1'
+    ? null
+    : (process.env.TIKTOK_USER || state.tiktok?.username || 'zenfacts_vn');
   if (defaultChannel) {
     connectTikTokLive(defaultChannel).catch((err) => {
       console.warn(`[Auto-Connect @${defaultChannel}] Chưa kết nối được ngay:`, err.message);
@@ -1484,10 +1645,15 @@ function gracefulShutdown(signal) {
   logLine('INFO', 'System', `Nhận tín hiệu ${signal}, đang dừng dịch vụ an toàn...`);
 
   clearInterval(wsHeartbeatInterval);
+  clearInterval(giftComboCleanupInterval);
   clearTimeout(saveTimer);
 
   if (zeroTts) {
     zeroTts.shuttingDown = true;
+    if (zeroTts.restartTimer) {
+      clearTimeout(zeroTts.restartTimer);
+      zeroTts.restartTimer = null;
+    }
     if (zeroTts.proc) {
       try { zeroTts.proc.kill(); } catch (_) {}
     }

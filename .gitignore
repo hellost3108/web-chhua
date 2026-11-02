@@ -17,3 +17,4 @@ embedded-assets.js
 *.key
 *.p12
 public/assets/bg_chant.m4a
+test/tmp/

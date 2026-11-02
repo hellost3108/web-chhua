@@ -88,9 +88,20 @@
     { x: 940, y: 1188, rank: 6 }
   ];
 
+  let lastRenderedVipJson = '';
+
   function renderVipCushions(leaderboard = []) {
     const layer = document.getElementById('vipCushionsLayer');
     if (!layer) return;
+
+    // Chỉ dựng lại DOM (và decode lại 6 ảnh avatar) khi danh sách TÊN ở top 6 Bảng Vàng
+    // thực sự thay đổi — khung này chỉ hiển thị rank + name (không hiển thị số công đức),
+    // nên dùng merit làm khóa (như renderCongregationHall) sẽ vô tình render lại mỗi khi
+    // có người cộng thêm công đức dù thứ hạng top 6 không đổi, gây giật/nhấp nháy ảnh.
+    const top6 = leaderboard.slice(0, 6);
+    const sig = top6.map((d) => d.name).join('|');
+    if (sig === lastRenderedVipJson && layer.children.length > 0) return;
+    lastRenderedVipJson = sig;
 
     layer.innerHTML = VIP_CUSHION_COORDS.map((slot, idx) => {
       const dev = leaderboard[idx];
@@ -410,10 +421,16 @@
 
     const btnAutoSim = document.getElementById('btnToggleAutoSim');
     if (btnAutoSim && st.settings) {
-      btnAutoSim.textContent = st.settings.autoSim
+      // Server là nguồn sự thật duy nhất cho trạng thái AutoSim: lưu lại giá trị đã
+      // được xác nhận để khi bấm nút, ta luôn gửi lên giá trị NGƯỢC với giá trị này
+      // (không dùng biến cục bộ riêng dễ bị lệch khi reload trang hoặc RPC thất bại).
+      confirmedAutoSim = Boolean(st.settings.autoSim);
+      autoSimPending = false;
+      btnAutoSim.disabled = false;
+      btnAutoSim.textContent = confirmedAutoSim
         ? '🤖 Tự động Giả lập Người Xem: ĐANG BẬT'
         : '🤖 Tự động Giả lập Người Xem: TẮT';
-      btnAutoSim.classList.toggle('active-toggle', Boolean(st.settings.autoSim));
+      btnAutoSim.classList.toggle('active-toggle', confirmedAutoSim);
     }
     if (st.settings) {
       if (typeof st.settings.musicVolume === 'number') {
@@ -780,10 +797,23 @@
     callRpc('live.connect', { username });
   });
 
-  let autoSimState = false;
-  document.getElementById('btnToggleAutoSim')?.addEventListener('click', () => {
-    autoSimState = !autoSimState;
-    callRpc('live.setAutoSim', { enabled: autoSimState });
+  // Trạng thái AutoSim đã được SERVER xác nhận lần gần nhất (đồng bộ trong updateUIState).
+  // Khởi tạo undefined để không gửi lệnh nào trước khi nhận được temple.state đầu tiên.
+  let confirmedAutoSim;
+  let autoSimPending = false;
+  document.getElementById('btnToggleAutoSim')?.addEventListener('click', (e) => {
+    if (autoSimPending || confirmedAutoSim === undefined) return; // chống double-click / gửi trùng lệnh
+    autoSimPending = true;
+    const btn = e.currentTarget;
+    btn.disabled = true;
+    const nextVal = !confirmedAutoSim;
+    callRpc('live.setAutoSim', { enabled: nextVal });
+    // Nhả khóa sau một khoảng an toàn nếu không có xác nhận nào trả về (ví dụ mất kết nối
+    // WebSocket) — tránh nút bị "kẹt" vô thời hạn khi RPC thất bại hoặc không phản hồi.
+    setTimeout(() => {
+      autoSimPending = false;
+      btn.disabled = false;
+    }, 4000);
   });
 
   document.getElementById('btnToggleTts')?.addEventListener('click', (e) => {
