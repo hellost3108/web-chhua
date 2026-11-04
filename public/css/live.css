@@ -931,6 +931,13 @@ body.obs-mode .stage-wrapper {
   align-items: center;
 }
 
+/* Mục 6 — bọc riêng sprite để xoay lệch nhẹ TẤT ĐỊNH theo từng ghế (đặt bởi live.js,
+   xem seat.jitterRot) mà KHÔNG xoay theo cả nameplate bên dưới (chữ bị nghiêng sẽ khó
+   đọc) và không đụng animation "thở" (congregationBreath) đang chạy trên chính sprite. */
+.seat-sprite-rotate {
+  transform-origin: bottom center;
+}
+
 .hall-seat .congregation-sprite {
   width: 82px;
   height: 184px;
@@ -977,6 +984,21 @@ body.obs-mode .stage-wrapper {
 .seat-badge.rose-supporter {
   border-color: rgba(255, 113, 157, 0.78);
   box-shadow: 0 0 6px rgba(255, 77, 133, 0.24);
+}
+
+/* Mục 6 — người thường KHÔNG trong nhóm vừa tương tác (xem ACTIVE_NAMEPLATE_LIMIT
+   trong live.js): chỉ còn 1 chấm avatar nhỏ, mờ nhẹ, không còn khung/tên — tránh
+   "20–40 nameplate chồng lên nhau", vẫn giữ avatar để cảm giác đạo tràng đông đủ. */
+.seat-badge-idle {
+  padding: 2px;
+  background: rgba(10, 3, 2, 0.5);
+  border-color: rgba(244, 193, 80, 0.3);
+  opacity: 0.7;
+}
+.seat-badge-idle .seat-avatar {
+  width: 15px;
+  height: 15px;
+  font-size: 8px;
 }
 
 .seat-rose-mark {

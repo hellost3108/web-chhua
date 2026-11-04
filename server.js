@@ -515,6 +515,11 @@ function toPublicDevotee(d, rank) {
     lastRoseAt: d.lastRoseAt || null,
     isRoseDonor: roseCount > 0,
     lastWish: d.lastWish || '',
+    // Mục 6 "ưu tiên dễ đọc hơn số lượng" — client dùng field này để chỉ hiện đầy đủ
+    // nameplate (avatar + tên) cho vài người VỪA tương tác, thu gọn người còn lại
+    // (xem renderSeatBadge trong live.js). Thí chủ cũ phục hồi từ merit-state.json
+    // trước khi có field này sẽ có giá trị null -> client coi như "không hoạt động".
+    lastActiveAt: d.lastActiveAt || null,
     appearance: d.appearance
   };
 }
@@ -682,6 +687,7 @@ function recordDevotee(user, uniqueId, avatar, meritDelta, incenseDelta = 0, gif
       gifts: 0,
       roseCount: 0,
       lastRoseAt: null,
+      lastActiveAt: null,
       lastWish: '',
       // Gieo ngoại hình đúng 1 LẦN tại đây — các lần recordDevotee() sau cho cùng
       // key chỉ cập nhật merit/avatar/lastWish, KHÔNG bao giờ gieo lại appearance.
@@ -703,6 +709,9 @@ function recordDevotee(user, uniqueId, avatar, meritDelta, incenseDelta = 0, gif
   dev.incense += incenseDelta;
   dev.gifts += giftDelta;
   if (cleanWish) dev.lastWish = cleanWish;
+  // Mọi tương tác thật (bình luận, nghi thức, quà) đều đi qua recordDevotee() nên đây
+  // là đúng 1 nơi cập nhật "vừa hoạt động" cho mục đích thu gọn nameplate phía client.
+  dev.lastActiveAt = new Date().toISOString();
 
   state.totalMerit += meritDelta;
   state.haloIntensity = Math.min(1.0, 0.35 + (state.totalMerit % 1000) / 1400);

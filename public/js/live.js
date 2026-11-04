@@ -187,6 +187,21 @@
         SEAT_FILL_ORDER.push(indexByKey.get(`R:${r}:${c}`));
       }
     }
+
+    // Mục 6 "các nhân vật đang xếp thành những hàng quá đồng đều, làm giao diện có
+    // cảm giác cứng" — thêm lệch nhẹ TẤT ĐỊNH (cùng 1 seatIdx luôn lệch y hệt mỗi lần
+    // render, không giật hình) theo x/y/góc xoay cho từng ghế, để đạo tràng trông như
+    // cụm người thật đứng tự nhiên thay vì lưới kẻ ô hoàn hảo. Biên độ nhỏ hơn nửa
+    // khoảng cách ghế (~80px) nên không gây chồng lấn giữa các ghế liền kề.
+    const pseudoRandom = (seed) => {
+      const v = Math.sin(seed * 12.9898) * 43758.5453;
+      return v - Math.floor(v); // [0, 1)
+    };
+    HALL_SEAT_COORDS.forEach((seat, seatIdx) => {
+      seat.jitterX = Math.round((pseudoRandom(seatIdx * 1.7 + 1) - 0.5) * 22); // ±11px
+      seat.jitterY = Math.round((pseudoRandom(seatIdx * 7.3 + 5) - 0.5) * 14); // ±7px
+      seat.jitterRot = +((pseudoRandom(seatIdx * 3.1 + 9) - 0.5) * 4.8).toFixed(2); // ±2.4deg
+    });
   })();
 
   // Chỉ dùng biến thể trang phục + vóc dáng từ appearance. Không render hair-accent nữa:
@@ -198,17 +213,39 @@
     return { outfitClass: `outfit-${outfitId}`, scale };
   }
 
-  function renderSeatBadge(viewer, maxLen) {
+  // Mục 6 "ưu tiên sự dễ đọc hơn số lượng hiển thị / không xếp 20–40 nameplate chồng
+  // lên nhau" — chỉ vài người VỪA tương tác (lastActiveAt mới nhất) mới hiện đủ avatar
+  // + tên; người còn lại thu gọn lại chỉ còn 1 chấm avatar nhỏ, mờ nhẹ. Người đã tặng
+  // Hoa Hồng luôn hiện đủ tên dù không phải người mới nhất (đã được vinh danh ở mục 5).
+  const ACTIVE_NAMEPLATE_LIMIT = 10;
+  function pickActiveViewerIndexes(viewers) {
+    return new Set(
+      viewers
+        .map((v, i) => ({ i, t: Date.parse(v.lastActiveAt) || 0 }))
+        .sort((a, b) => b.t - a.t)
+        .slice(0, ACTIVE_NAMEPLATE_LIMIT)
+        .map((e) => e.i)
+    );
+  }
+
+  function renderSeatBadge(viewer, maxLen, isActive = true) {
     const roseMark = Number(viewer.roseCount) > 0
       ? `<span class="seat-rose-mark" title="Đã tặng Hoa Hồng">🌹</span>`
       : '';
+    const avatarHtml = viewer.avatar
+      ? `<img src="${escapeHtml(viewer.avatar)}" alt="" />`
+      : escapeHtml(String(viewer.name || 'P').charAt(0).toUpperCase());
+    const showFull = isActive || Number(viewer.roseCount) > 0;
+    if (!showFull) {
+      return `
+        <div class="seat-badge seat-badge-idle" title="${escapeHtml(viewer.name || '')}">
+          <span class="seat-avatar">${avatarHtml}</span>
+        </div>
+      `;
+    }
     return `
       <div class="seat-badge${roseMark ? ' rose-supporter' : ''}">
-        <span class="seat-avatar">${
-          viewer.avatar
-            ? `<img src="${escapeHtml(viewer.avatar)}" alt="" />`
-            : escapeHtml(String(viewer.name || 'P').charAt(0).toUpperCase())
-        }</span>
+        <span class="seat-avatar">${avatarHtml}</span>
         <span class="seat-username">${escapeHtml(shortenName(viewer.name, maxLen))}</span>
         ${roseMark}
       </div>
@@ -227,8 +264,11 @@
     // Phật tử mỗi khi AutoSim hoặc bất kỳ ai cộng thêm công đức (diễn ra liên tục mỗi ~9.5s
     // hoặc mỗi nghi thức), gây giật khung hình / nhấp nháy trên toàn màn hình chánh điện.
     const hallViewers = regularViewers.slice(0, SEAT_FILL_ORDER.length);
+    const activeIdxSet = pickActiveViewerIndexes(hallViewers);
     const sig = JSON.stringify(
-      hallViewers.map((d) => `${d.uniqueId || ''}:${d.name}:${d.avatar || ''}:${Number(d.roseCount) > 0 ? 1 : 0}`)
+      hallViewers.map(
+        (d, i) => `${d.uniqueId || ''}:${d.name}:${d.avatar || ''}:${Number(d.roseCount) > 0 ? 1 : 0}:${activeIdxSet.has(i) ? 1 : 0}`
+      )
     );
     if (sig === lastRenderedLeaderboardJson && congregationHall.children.length > 0) return;
     lastRenderedLeaderboardJson = sig;
@@ -243,18 +283,23 @@
         if (!seat) return '';
         const { scale: appearanceScale } = resolveAppearance(viewer);
         const finalScale = +(seat.scale * appearanceScale).toFixed(3);
+        const seatX = seat.x + (seat.jitterX || 0);
+        const seatY = seat.y + (seat.jitterY || 0);
+        const seatRot = seat.jitterRot || 0;
         return `
           <div
             class="hall-seat"
             data-seat-idx="${seatIdx}"
-            style="left: ${seat.x}px; top: ${seat.y}px; z-index: ${20 + seat.row * 2}; transform: translate(-50%, -100%) scale(${finalScale});"
+            style="left: ${seatX}px; top: ${seatY}px; z-index: ${20 + seat.row * 2}; transform: translate(-50%, -100%) scale(${finalScale});"
           >
-            <div
-              class="congregation-sprite crowd-variant-${seatIdx % 6}"
-              style="--crowd-delay: ${((seatIdx * 0.19) % 3.2).toFixed(2)}s;"
-              aria-hidden="true"
-            ></div>
-            ${renderSeatBadge(viewer, 11)}
+            <div class="seat-sprite-rotate" style="transform: rotate(${seatRot}deg);">
+              <div
+                class="congregation-sprite crowd-variant-${seatIdx % 6}"
+                style="--crowd-delay: ${((seatIdx * 0.19) % 3.2).toFixed(2)}s;"
+                aria-hidden="true"
+              ></div>
+            </div>
+            ${renderSeatBadge(viewer, 11, activeIdxSet.has(i))}
           </div>
         `;
       })
