@@ -1,3 +1,4 @@
+
 :root {
   --bg-deep: #0b0302;
   --gold-bright: #ffe89e;
@@ -66,6 +67,10 @@ body.obs-mode .quick-dock {
   display: none !important;
 }
 
+body.obs-mode,
+body.obs-mode * {
+  cursor: none !important;
+}
 /* ==========================================================================
    KHUNG 9:16 CHUẨN TIKTOK LIVE (1080 x 1920 LOGICAL) — TỐI ƯU HÓA GPU COMPOSITOR
    ========================================================================== */
@@ -408,8 +413,119 @@ body.obs-mode .stage-wrapper {
    ========================================================================== */
 .devotee-sprite {
   display: block;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   transform-origin: bottom center;
+}
+
+/* --------------------------------------------------------------------------
+   4B. HỆ THỐNG NGOẠI HÌNH (CHARACTER APPEARANCE SYSTEM) — xem rollAppearance()
+   trong server.js. Sprite gốc chỉ có 1 lớp ảnh phẳng (không tách tóc/trang phục
+   riêng) nên TRANG PHỤC dùng CSS filter (đổi tông màu áo toàn thân, giữ nếp áo/
+   đổ bóng gốc đã bake sẵn trong PNG để không bị "tô màu thô") và TÓC dùng 1 khối
+   CSS nhỏ (.hair-accent) chồng đúng vị trí búi tóc — CHỈ áp dụng cho avatar NGỒI
+   QUAY LƯNG TĨNH (đạo tràng/đệm VIP, luôn đúng 1 tư thế "devotee.png") để không
+   bao giờ bị lệch khi đổi tư thế, như ghi chú trong server.js.
+   -------------------------------------------------------------------------- */
+.devotee-wrap {
+  position: relative;
+  display: block;
+}
+
+/* TRANG PHỤC — 6 biến thể tông màu, giữ nguyên nếp áo/đổ bóng gốc trong PNG */
+.devotee-wrap.outfit-0 .devotee-sprite,
+.central-sprite-stack.outfit-0 { filter: none; }
+.devotee-wrap.outfit-1 .devotee-sprite,
+.central-sprite-stack.outfit-1 { filter: brightness(1.12) saturate(0.68) contrast(1.02); }
+.devotee-wrap.outfit-2 .devotee-sprite,
+.central-sprite-stack.outfit-2 { filter: brightness(1.3) saturate(0.42) sepia(0.08); }
+.devotee-wrap.outfit-3 .devotee-sprite,
+.central-sprite-stack.outfit-3 { filter: sepia(0.55) saturate(1.35) brightness(0.92) hue-rotate(-8deg); }
+.devotee-wrap.outfit-4 .devotee-sprite,
+.central-sprite-stack.outfit-4 { filter: sepia(0.35) saturate(0.85) brightness(1.16) hue-rotate(6deg); }
+.devotee-wrap.outfit-5 .devotee-sprite,
+.central-sprite-stack.outfit-5 { filter: brightness(1.05) saturate(1.18) hue-rotate(26deg); }
+
+/* outfit-5 "Áo Lễ Khăn Choàng": thêm dải khăn chéo vai bằng CSS, không chỉ đổi màu */
+.devotee-wrap.outfit-5::before {
+  content: '';
+  position: absolute;
+  left: 20%;
+  top: 20%;
+  width: 16%;
+  height: 68%;
+  background: linear-gradient(180deg, rgba(244, 193, 80, 0.88), rgba(184, 126, 20, 0.62));
+  transform: rotate(13deg);
+  border-radius: 5px;
+  opacity: 0.88;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* TÓC — khối phụ kiện nhỏ chồng vùng búi tóc (sprite devotee.png 139x190, búi ở
+   khoảng top 4%-20%, center ngang 50% khung ảnh). */
+.hair-accent {
+  position: absolute;
+  left: 32%;
+  top: 4%;
+  width: 36%;
+  height: 15%;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 1;
+}
+.hair-0 .hair-accent {
+  /* Tóc ngắn đen = giữ nguyên búi gốc trong PNG, không thêm phụ kiện */
+  display: none;
+}
+.hair-1 .hair-accent {
+  /* Tóc dài buộc gọn: thêm đuôi tóc buông nhẹ phía dưới búi */
+  top: 9%;
+  left: 41%;
+  width: 17%;
+  height: 32%;
+  border-radius: 45% 45% 60% 60% / 30% 30% 70% 70%;
+  background: linear-gradient(180deg, #1c130d, #0b0705);
+  opacity: 0.92;
+}
+.hair-2 .hair-accent {
+  /* Tóc búi cao: búi phồng lớn hơn, sáng nhẹ phía trên búi gốc */
+  top: 0%;
+  left: 35%;
+  width: 30%;
+  height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, rgba(78, 54, 34, 0.95), rgba(18, 12, 8, 0.88) 72%);
+}
+.hair-3 .hair-accent {
+  /* Tóc bạc/hoa râm: phủ sáng bạc mờ lên búi */
+  top: 3%;
+  left: 29%;
+  width: 42%;
+  height: 18%;
+  border-radius: 50%;
+  background: rgba(216, 216, 224, 0.58);
+  mix-blend-mode: overlay;
+}
+.hair-4 .hair-accent {
+  /* Đầu cạo: phủ kín màu da lên toàn vùng búi tóc gốc */
+  top: 2%;
+  left: 28%;
+  width: 44%;
+  height: 20%;
+  border-radius: 50%;
+  background: #d9a877;
+}
+.hair-5 .hair-accent {
+  /* Khăn trùm đầu trang nhã: trùm rộng hơn từ đỉnh đầu xuống vai */
+  top: -2%;
+  left: 20%;
+  width: 60%;
+  height: 32%;
+  border-radius: 48% 48% 55% 55% / 60% 60% 40% 40%;
+  background: linear-gradient(165deg, #5b6b84, #37475c);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
 }
 
 /* Chủ lễ đang hành lễ ngay chính giữa trước lư hương đồng */
@@ -424,10 +540,18 @@ body.obs-mode .stage-wrapper {
   z-index: 14;
   pointer-events: none;
   will-change: transform;
+  opacity: 1;
 }
 
 .central-worshipper.walking-up {
   animation: centralWalkUpCarpet 2.1s linear forwards;
+}
+
+/* Lượt Rose 1/5/10 (Dâng hoa/Cầu phúc) dùng bước vào NHANH hơn (~1s) để tổng thời
+   lượng hoạt cảnh khớp đúng mốc 2s/3s yêu cầu — xem playQuickOfferRitual/
+   playLightBlessingRitual trong live.js. */
+.central-worshipper.walking-up-fast {
+  animation: centralWalkUpCarpetFast 1s linear forwards;
 }
 
 @keyframes centralWalkUpCarpet {
@@ -437,6 +561,24 @@ body.obs-mode .stage-wrapper {
   100% {
     transform: translate3d(-50%, 0px, 0) scale(1);
   }
+}
+
+@keyframes centralWalkUpCarpetFast {
+  0% {
+    transform: translate3d(-50%, 260px, 0) scale(1.04);
+  }
+  100% {
+    transform: translate3d(-50%, 0px, 0) scale(1);
+  }
+}
+
+/* Sau khi hoàn tất nghi thức, Chủ Lễ "trở về chỗ" bằng cách mờ dần khỏi chính điện
+   (kiến trúc hiện tại dùng 1 vị trí trung tâm cố định cho mọi lượt nghi thức, không
+   có đường lùi theo đúng toạ độ ghế riêng của từng người — xem ghi chú hạn chế
+   trong live.js) thay vì hiện đứng yên vĩnh viễn cho tới lượt kế tiếp ghi đè lên. */
+.central-worshipper.ritual-fade-out {
+  opacity: 0;
+  transition: opacity 0.5s ease;
 }
 
 .central-sprite-stack {
@@ -543,7 +685,7 @@ body.obs-mode .stage-wrapper {
   color: var(--gold-bright);
 }
 
-/* 5. HÀNG 6 ĐỆM QUỲ VIP TRÊN BỤC GỖ (STATIC LAYER, 0% CPU KHI ĐỨNG YÊN) */
+/* 5. HÀNG 6 ĐỆM QUỲ VIP — CHỈ NGƯỜI ĐÃ TẶNG HOA HỒNG */
 .vip-cushions-layer {
   position: absolute;
   inset: 0;
@@ -555,9 +697,72 @@ body.obs-mode .stage-wrapper {
 .vip-devotee-slot {
   position: absolute;
   transform: translate3d(-50%, -100%, 0);
+  width: 122px;
   display: flex;
   flex-direction: column;
   align-items: center;
+  isolation: isolate;
+
+  --vip-accent: #ffd76a;
+  --vip-accent-2: #ff6c9d;
+  --vip-surface-a: rgba(88, 28, 18, 0.98);
+  --vip-surface-b: rgba(42, 8, 22, 0.98);
+  --vip-glow: rgba(255, 191, 73, 0.46);
+}
+
+.vip-theme-1 {
+  --vip-accent: #79f1e1;
+  --vip-accent-2: #ffc95b;
+  --vip-surface-a: rgba(15, 77, 74, 0.98);
+  --vip-surface-b: rgba(35, 26, 8, 0.98);
+  --vip-glow: rgba(77, 234, 218, 0.38);
+}
+.vip-theme-2 {
+  --vip-accent: #e4a3ff;
+  --vip-accent-2: #ff75ad;
+  --vip-surface-a: rgba(72, 24, 96, 0.98);
+  --vip-surface-b: rgba(51, 11, 37, 0.98);
+  --vip-glow: rgba(211, 116, 255, 0.4);
+}
+.vip-theme-3 {
+  --vip-accent: #ff9a78;
+  --vip-accent-2: #ffe16f;
+  --vip-surface-a: rgba(102, 35, 18, 0.98);
+  --vip-surface-b: rgba(61, 23, 7, 0.98);
+  --vip-glow: rgba(255, 123, 82, 0.42);
+}
+.vip-theme-4 {
+  --vip-accent: #8fd0ff;
+  --vip-accent-2: #f6a8ff;
+  --vip-surface-a: rgba(20, 59, 101, 0.98);
+  --vip-surface-b: rgba(50, 20, 72, 0.98);
+  --vip-glow: rgba(80, 173, 255, 0.4);
+}
+.vip-theme-5 {
+  --vip-accent: #b9f47a;
+  --vip-accent-2: #ffd45f;
+  --vip-surface-a: rgba(47, 78, 26, 0.98);
+  --vip-surface-b: rgba(63, 39, 8, 0.98);
+  --vip-glow: rgba(153, 231, 80, 0.36);
+}
+
+.vip-seat-halo {
+  position: absolute;
+  left: 50%;
+  top: 18px;
+  width: 120px;
+  height: 128px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--vip-glow) 0%, rgba(255, 225, 147, 0.16) 38%, transparent 72%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.vip-devotee-slot .devotee-wrap {
+  width: 102px;
+  height: 132px;
+  transform-origin: bottom center;
 }
 
 .vip-devotee-slot .devotee-sprite {
@@ -565,38 +770,149 @@ body.obs-mode .stage-wrapper {
   height: 132px;
 }
 
-.vip-rank-pill {
-  display: inline-flex;
+.vip-nameplate {
+  position: relative;
+  width: 122px;
+  min-height: 44px;
+  margin-top: -10px;
+  padding: 4px 6px 4px 5px;
+  border-radius: 12px 999px 999px 12px;
+  border: 1.5px solid var(--vip-accent);
+  background: linear-gradient(125deg, var(--vip-surface-a), var(--vip-surface-b));
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.12) inset,
+    0 0 10px var(--vip-glow),
+    0 5px 10px rgba(0, 0, 0, 0.48);
+  display: flex;
   align-items: center;
   gap: 5px;
-  padding: 3px 10px 3px 4px;
-  border-radius: 999px;
-  background: rgba(14, 5, 4, 0.94);
-  border: 1.5px solid var(--gold-main);
-  margin-top: -10px;
+  overflow: hidden;
   white-space: nowrap;
 }
 
-.vip-rank-num {
-  width: 20px;
-  height: 20px;
+.vip-nameplate::after {
+  content: '';
+  position: absolute;
+  top: -26px;
+  left: -42px;
+  width: 24px;
+  height: 96px;
+  transform: rotate(22deg);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.34), transparent);
+  animation: vipNameplateShimmer 5.2s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes vipNameplateShimmer {
+  0%, 64% { transform: translateX(0) rotate(22deg); opacity: 0; }
+  70% { opacity: 0.9; }
+  88%, 100% { transform: translateX(190px) rotate(22deg); opacity: 0; }
+}
+
+.vip-rank-medal {
+  position: absolute;
+  left: -1px;
+  top: -1px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
-  background: #e6ac35;
-  color: #1b0503;
-  font-size: 12px;
+  border: 1px solid #fff0ad;
+  background: linear-gradient(145deg, #fff3a1, #d88a16);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  color: #2a0903;
+  font-size: 10px;
   font-weight: 900;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  z-index: 3;
+}
+
+.vip-profile-avatar {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  border-radius: 50%;
+  border: 2px solid var(--vip-accent-2);
+  background: linear-gradient(145deg, var(--vip-accent), var(--vip-accent-2));
+  box-shadow: 0 0 8px var(--vip-glow), 0 0 0 1px rgba(255, 255, 255, 0.48) inset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  z-index: 2;
+}
+
+.vip-avatar-fallback {
+  color: #2b0906;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.vip-profile-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.vip-copy {
+  position: relative;
+  z-index: 2;
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1px;
 }
 
 .vip-rank-name {
-  font-size: 13px;
-  font-weight: 800;
-  color: #fff;
-  max-width: 92px;
+  max-width: 74px;
   overflow: hidden;
+  color: #fff;
+  font-size: 12.5px;
+  font-weight: 900;
+  line-height: 1.1;
   text-overflow: ellipsis;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.vip-rose-count {
+  width: max-content;
+  max-width: 72px;
+  padding: 1px 5px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--vip-accent-2) 72%, white);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.13);
+  color: #fff6d5;
+  font-size: 10.5px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.78);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vip-nameplate::after {
+    animation: none;
+  }
+}
+
+/* Legacy selectors kept harmless for cached markup during a hot reload. */
+.vip-rank-pill {
+  display: inline-flex;
+  align-items: center;
+}
+.vip-rank-num {
+  color: #1b0503;
+  font-size: 12px;
+  font-weight: 900;
+}
+.vip-rank-pill .vip-rank-name {
+  color: #fff;
 }
 
 /* 6. ĐẠO TRÀNG NGƯỜI XEM QUỲ LỄ HAI BÊN THẢM ĐỎ (40 CHỖ NGỒI TĨNH SIÊU NHẸ CPU) */
@@ -615,9 +931,35 @@ body.obs-mode .stage-wrapper {
   align-items: center;
 }
 
-.hall-seat .devotee-sprite {
-  width: 92px;
-  height: 120px;
+.hall-seat .congregation-sprite {
+  width: 82px;
+  height: 184px;
+  flex: 0 0 auto;
+  background-image: url('/assets/congregation_sprites.png');
+  background-repeat: no-repeat;
+  background-size: 300% 200%;
+  background-position: 0 0;
+  transform-origin: bottom center;
+  filter: drop-shadow(0 6px 4px rgba(0, 0, 0, 0.36));
+  animation: congregationBreath 4.8s ease-in-out var(--crowd-delay, 0s) infinite alternate;
+}
+
+.crowd-variant-0 { background-position: 0% 0%; }
+.crowd-variant-1 { background-position: 50% 0%; }
+.crowd-variant-2 { background-position: 100% 0%; }
+.crowd-variant-3 { background-position: 0% 100%; }
+.crowd-variant-4 { background-position: 50% 100%; }
+.crowd-variant-5 { background-position: 100% 100%; }
+
+@keyframes congregationBreath {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(0, -2px, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hall-seat .congregation-sprite {
+    animation: none;
+  }
 }
 
 .seat-badge {
@@ -630,6 +972,17 @@ body.obs-mode .stage-wrapper {
   border: 1px solid rgba(244, 193, 80, 0.68);
   margin-top: -12px;
   white-space: nowrap;
+}
+
+.seat-badge.rose-supporter {
+  border-color: rgba(255, 113, 157, 0.78);
+  box-shadow: 0 0 6px rgba(255, 77, 133, 0.24);
+}
+
+.seat-rose-mark {
+  font-size: 10px;
+  line-height: 1;
+  filter: drop-shadow(0 0 2px rgba(255, 92, 141, 0.7));
 }
 
 .seat-avatar {
@@ -1123,4 +1476,87 @@ body.obs-mode .stage-wrapper {
   background: rgba(255, 255, 255, 0.04);
   border-left: 3px solid var(--gold-main);
   color: #f3e5cf;
+}
+
+/* ============================================================================
+   MỤC 8.1 — GỢI Ý NGỮ CẢNH NGẮN (GUIDANCE HINT)
+   Dải chữ mỏng, mờ dần đổi câu mỗi ~7s, đặt sát mép TRÊN của --safe-bottom (không che
+   chánh điện phía trên, không bị khung bình luận TikTok thật che mất phía dưới).
+   ============================================================================ */
+.guidance-hint-pill {
+  position: absolute;
+  left: 50%;
+  bottom: calc(var(--safe-bottom) + 14px);
+  transform: translateX(-50%) translateY(6px);
+  max-width: 560px;
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 1px solid rgba(244, 193, 80, 0.42);
+  background: rgba(18, 5, 3, 0.62);
+  color: var(--gold-bright);
+  font-size: 14px;
+  font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  z-index: 16;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.9s ease, transform 0.9s ease;
+}
+.guidance-hint-pill.hint-visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .guidance-hint-pill {
+    transition: opacity 0.3s ease;
+  }
+}
+
+/* ============================================================================
+   MỤC 11 — ADMIN: CÁC CÔNG TẮC HIỂN THỊ/HIỆU ỨNG/HIỆU NĂNG
+   Áp dụng qua class trên <body>, đặt bởi applyDisplaySettings() trong live.js mỗi khi
+   state.settings cập nhật. Không đổi bố cục/toạ độ — chỉ bật/tắt hoặc giảm hiệu ứng.
+   ============================================================================ */
+
+/* 11a. Bật/tắt hiệu ứng khu VIP (shimmer nameplate + hào quang bục) */
+body.vip-effects-off .vip-nameplate::after {
+  animation: none;
+  opacity: 0;
+}
+body.vip-effects-off .vip-seat-halo {
+  opacity: 0.28;
+}
+
+/* 11b. Cường độ hiệu ứng khu VIP: low/normal/high (mặc định = normal, không cần class) */
+body.vip-intensity-low .vip-seat-halo {
+  opacity: 0.5;
+}
+body.vip-intensity-low .vip-nameplate::after {
+  animation-duration: 8.5s;
+}
+body.vip-intensity-high .vip-seat-halo {
+  opacity: 1;
+  filter: saturate(1.25);
+}
+body.vip-intensity-high .vip-nameplate::after {
+  animation-duration: 3.4s;
+}
+
+/* 11c. Bật/tắt nameplate NGƯỜI THƯỜNG (đạo tràng) — nameplate VIP luôn giữ để vinh danh */
+body.nameplates-off .seat-badge {
+  display: none;
+}
+
+/* 11d. Chế độ giảm hiệu ứng khi LIVE (hiệu năng) — tạm dừng các animation nền chạy vô hạn
+   (breathing của 40 Phật tử, shimmer nameplate, vòng xoay hào quang/bánh xe Pháp Luân);
+   KHÔNG ẩn hào quang/tượng Phật để tránh đúng lỗi "nhấp nháy tượng Phật" phải tránh. */
+body.effects-reduced .hall-seat .congregation-sprite,
+body.effects-reduced .vip-nameplate::after,
+body.effects-reduced .halo-sunburst,
+body.effects-reduced .dharma-wheel-outer,
+body.effects-reduced .dharma-wheel-inner {
+  animation-play-state: paused;
 }

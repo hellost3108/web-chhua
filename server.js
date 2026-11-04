@@ -405,7 +405,16 @@ const DEFAULT_STATE = {
     autoSimIntervalMs: 9500,
     mockLiveEnabled: false,
     interactionsEnabled: true,
-    autoFortuneOnRoseEnabled: true
+    autoFortuneOnRoseEnabled: true,
+    // Mục 11 (Admin nâng cấp hiển thị/hiệu ứng) — xem getPublicState() cho vipMaxSeats
+    // và public/js/live.js (applyDisplaySettings) cho cách các cờ này được áp dụng.
+    vipEffectsEnabled: true,
+    vipEffectIntensity: 'normal', // 'low' | 'normal' | 'high'
+    vipMaxSeats: 6, // kẹp 4–6 ở getPublicState(), không cho vượt quá 6 toạ độ bục đã dựng sẵn
+    regularNameplatesEnabled: true,
+    guidanceHintsEnabled: true,
+    ambientEffectsEnabled: true,
+    reducedEffectsMode: false
   },
   tiktok: {
     connected: false,
@@ -484,21 +493,69 @@ function isMockOrSimDevotee(uniqueId) {
   return uid.startsWith('mock_') || SIM_DEVOTEE_UNIQUE_IDS.has(uid);
 }
 
-function getLeaderboard(limit = 6) {
+function getVisibleDevotees() {
   const showMock = Boolean(state.settings.mockLiveEnabled) || Boolean(state.settings.autoSim);
-  return Object.values(state.devotees)
-    .filter((d) => showMock || !isMockOrSimDevotee(d.uniqueId))
-    .sort((a, b) => b.merit - a.merit)
+  return Object.values(state.devotees).filter((d) => showMock || !isMockOrSimDevotee(d.uniqueId));
+}
+
+function toPublicDevotee(d, rank) {
+  // Dữ liệu cũ có thể chưa có appearance/roseCount. Chỉ bổ sung fallback an toàn,
+  // không suy đoán quà thường là Hoa Hồng vì field gifts còn chứa nhiều loại quà khác.
+  if (!d.appearance) d.appearance = rollAppearance(d.uniqueId, d.name);
+  const roseCount = Math.max(0, Number(d.roseCount) || 0);
+  return {
+    rank,
+    name: d.name,
+    uniqueId: d.uniqueId,
+    avatar: d.avatar || '',
+    merit: Number(d.merit) || 0,
+    incense: Number(d.incense) || 0,
+    gifts: Number(d.gifts) || 0,
+    roseCount,
+    lastRoseAt: d.lastRoseAt || null,
+    isRoseDonor: roseCount > 0,
+    lastWish: d.lastWish || '',
+    appearance: d.appearance
+  };
+}
+
+function getLeaderboard(limit = 6) {
+  return getVisibleDevotees()
+    .sort((a, b) => (Number(b.merit) || 0) - (Number(a.merit) || 0))
     .slice(0, limit)
-    .map((d, index) => ({
-      rank: index + 1,
-      name: d.name,
-      uniqueId: d.uniqueId,
-      avatar: d.avatar || '',
-      merit: d.merit,
-      incense: d.incense || 0,
-      lastWish: d.lastWish || ''
-    }));
+    .map((d, index) => toPublicDevotee(d, index + 1));
+}
+
+// Bố trí ghế tách biệt với bảng TẤM LÒNG THÀNH:
+// - VIP: chỉ người đã tặng Rose, ưu tiên tổng Rose rồi lần tặng gần nhất.
+// - Thường: mọi người còn lại theo công đức; loại đúng 6 người đang ngồi VIP để
+//   không render trùng một người ở cả hai tầng. Donor vượt quá 6 chỗ vẫn được ngồi
+//   dưới và giữ cờ isRoseDonor để client có thể gắn dấu Hoa Hồng nhỏ.
+function getSeatingState(vipLimit = 6, regularLimit = 40) {
+  const visible = getVisibleDevotees();
+  const vipRows = visible
+    .filter((d) => (Number(d.roseCount) || 0) > 0)
+    .sort((a, b) => {
+      const roseDelta = (Number(b.roseCount) || 0) - (Number(a.roseCount) || 0);
+      if (roseDelta !== 0) return roseDelta;
+      const recentDelta = (Date.parse(b.lastRoseAt) || 0) - (Date.parse(a.lastRoseAt) || 0);
+      if (recentDelta !== 0) return recentDelta;
+      return (Number(b.merit) || 0) - (Number(a.merit) || 0);
+    })
+    .slice(0, vipLimit);
+
+  const vipSet = new Set(vipRows);
+  const regularRows = visible
+    .filter((d) => !vipSet.has(d))
+    .sort((a, b) => (Number(b.merit) || 0) - (Number(a.merit) || 0))
+    .slice(0, regularLimit);
+
+  return {
+    vip: vipRows.map((d, index) => toPublicDevotee(d, index + 1)),
+    regular: regularRows.map((d, index) => toPublicDevotee(d, index + 1)),
+    vipCapacity: vipLimit,
+    regularCapacity: regularLimit
+  };
 }
 // Bộ lọc chặn ký tự lạ (Cuneiform 𒐫, Zalgo, Braille, ký tự spam) & từ ngữ phản cảm
 const WEIRD_SPAM_RE = /[\u{12000}-\u{1254F}\uFDFD\u2800-\u28FF\u2580-\u259F]|[\u0300-\u036F]{3,}/u;
@@ -556,6 +613,61 @@ function sanitizeWishText(rawWish) {
   return cleaned;
 }
 
+// ============================================================================
+// 3B. HỆ THỐNG NGOẠI HÌNH NHÂN VẬT (CHARACTER APPEARANCE SYSTEM)
+// ============================================================================
+// Vì toàn bộ 8 khung hình sprite hiện có (public/assets/devotee*.png) là ảnh phẳng
+// đã "nướng" sẵn dáng người + tóc + trang phục vào làm MỘT, không có lớp tóc/trang
+// phục tách riêng để đổi hình dạng thật sự — hệ thống này quản lý 1 biến thể TRANG
+// PHỤC (lọc màu CSS áp cho toàn sprite, xem outfitId) và 1 biến thể PHỤ KIỆN TÓC
+// (hình khối CSS nhỏ chồng đúng vị trí búi tóc, xem hairId, chỉ áp cho avatar NGỒI
+// quay lưng tĩnh — không áp cho Chủ Lễ đang chuyển động qua nhiều tư thế để tránh
+// lệch/nổi qua vai như yêu cầu). avatarScale thêm một chút khác biệt vóc dáng nhẹ.
+// Toàn bộ 3 giá trị được "gieo" (seed) MỘT LẦN DUY NHẤT từ uniqueId khi tạo thí chủ
+// mới (xem recordDevotee) rồi lưu cố định vào state.devotees[key].appearance — đảm
+// bảo cùng một người xem quay lại luôn giữ đúng ngoại hình, không đổi khi refresh.
+const OUTFIT_VARIANTS = [
+  { id: 0, name: 'Áo Lam Truyền Thống', cssClass: 'outfit-0' },
+  { id: 1, name: 'Áo Tràng Xám Nhạt', cssClass: 'outfit-1' },
+  { id: 2, name: 'Trang Phục Trắng Ngà', cssClass: 'outfit-2' },
+  { id: 3, name: 'Áo Nâu Nhạt', cssClass: 'outfit-3' },
+  { id: 4, name: 'Trang Phục Be/Kem', cssClass: 'outfit-4' },
+  { id: 5, name: 'Áo Lễ Khăn Choàng', cssClass: 'outfit-5' }
+];
+const HAIR_VARIANTS = [
+  { id: 0, name: 'Tóc Ngắn Đen', cssClass: 'hair-0' },
+  { id: 1, name: 'Tóc Dài Buộc Gọn', cssClass: 'hair-1' },
+  { id: 2, name: 'Tóc Búi Cao', cssClass: 'hair-2' },
+  { id: 3, name: 'Tóc Bạc/Hoa Râm', cssClass: 'hair-3' },
+  { id: 4, name: 'Đầu Cạo', cssClass: 'hair-4' },
+  { id: 5, name: 'Khăn Trùm Đầu', cssClass: 'hair-5' }
+];
+
+// Hash chuỗi -> số nguyên dương ổn định (FNV-1a rút gọn) — KHÔNG dùng Math.random(),
+// để cùng một uniqueId luôn ra đúng cùng 1 kết quả trên mọi lần chạy/mọi máy chủ.
+function hashUniqueIdToInt(str) {
+  let h = 0x811c9dc5;
+  const s = String(str || '');
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+// Sinh ngoại hình ổn định cho 1 uniqueId — KHÔNG suy đoán giới tính/đặc điểm cá nhân
+// thực tế từ nickname, chỉ chọn đều trong bộ biến thể trung tính bằng hash số học.
+function rollAppearance(uniqueId, displayName) {
+  const seed = hashUniqueIdToInt(uniqueId || displayName || Math.random().toString(36));
+  const outfitId = seed % OUTFIT_VARIANTS.length;
+  const hairId = Math.floor(seed / OUTFIT_VARIANTS.length) % HAIR_VARIANTS.length;
+  // Dao động vóc dáng nhẹ ±6% quanh 1.0, tách bạch khỏi outfit/hair để không lặp
+  // chu kỳ trùng với chúng (dùng số nguyên tố khác làm bước chia thứ 3).
+  const scaleSteps = Math.floor(seed / (OUTFIT_VARIANTS.length * HAIR_VARIANTS.length)) % 13;
+  const avatarScale = +(0.94 + (scaleSteps / 12) * 0.12).toFixed(3);
+  return { outfitId, hairId, avatarScale };
+}
+
 function recordDevotee(user, uniqueId, avatar, meritDelta, incenseDelta = 0, giftDelta = 0, wish = '') {
   const displayName = sanitizeUserName(user || uniqueId);
   const cleanWish = sanitizeWishText(wish);
@@ -568,10 +680,23 @@ function recordDevotee(user, uniqueId, avatar, meritDelta, incenseDelta = 0, gif
       merit: 0,
       incense: 0,
       gifts: 0,
-      lastWish: ''
+      roseCount: 0,
+      lastRoseAt: null,
+      lastWish: '',
+      // Gieo ngoại hình đúng 1 LẦN tại đây — các lần recordDevotee() sau cho cùng
+      // key chỉ cập nhật merit/avatar/lastWish, KHÔNG bao giờ gieo lại appearance.
+      appearance: rollAppearance(uniqueId || displayName, displayName)
     };
   }
   const dev = state.devotees[key];
+  // Thí chủ cũ được nạp lại từ merit-state.json (trước khi có hệ thống ngoại hình
+  // này) chưa có appearance -> gieo bổ sung đúng 1 lần tại đây, sau đó giữ cố định
+  // như mọi thí chủ khác (saveState() sẽ ghi lại field này vào file).
+  if (!dev.appearance) {
+    dev.appearance = rollAppearance(dev.uniqueId || key, dev.name);
+  }
+  if (!Number.isFinite(Number(dev.roseCount))) dev.roseCount = 0;
+  if (typeof dev.lastRoseAt !== 'string') dev.lastRoseAt = null;
   dev.name = displayName;
   if (avatar) dev.avatar = avatar;
   dev.merit += meritDelta;
@@ -582,6 +707,15 @@ function recordDevotee(user, uniqueId, avatar, meritDelta, incenseDelta = 0, gif
   state.totalMerit += meritDelta;
   state.haloIntensity = Math.min(1.0, 0.35 + (state.totalMerit % 1000) / 1400);
   return dev;
+}
+
+function recordRoseDonation(ctx, count) {
+  const roseCount = Math.max(1, Math.floor(Number(count) || 1));
+  const devotee = recordDevotee(ctx.user, ctx.uniqueId, ctx.avatar, 0, 0, 0, '');
+  devotee.roseCount = Math.max(0, Number(devotee.roseCount) || 0) + roseCount;
+  devotee.lastRoseAt = new Date().toISOString();
+  saveState();
+  return devotee;
 }
 
 function pushEventLog(evt) {
@@ -631,7 +765,14 @@ function getPublicState() {
     activeIncenseSticks: state.activeIncenseSticks,
     haloIntensity: state.haloIntensity,
     offerings: state.offerings,
-    leaderboard: getLeaderboard(24),
+    // 6 đệm VIP + tối đa 40 chỗ đạo tràng (xem HALL_SEAT_COORDS trong live.js) = 46,
+    // để mọi chỗ ngồi có thể được lấp bởi người xem THẬT khi đạo tràng đông đủ, thay
+    // vì cắt bớt ở 24 và buộc client phải tự vẽ thêm avatar giả cho các ghế còn lại.
+    leaderboard: getLeaderboard(46),
+    // vipMaxSeats chỉnh được từ Admin (mục 11), kẹp 4–6 theo đúng khoảng "4–6 vị trí"
+    // trong tài liệu thiết kế — client (VIP_CUSHION_COORDS trong live.js) vẫn luôn có
+    // sẵn 6 toạ độ bục, slot thừa chỉ đơn giản không có donor nên không vẽ (xem renderVipCushions).
+    seating: getSeatingState(Math.max(4, Math.min(6, Number(state.settings.vipMaxSeats) || 6)), 40),
     recentEvents: state.recentEvents.slice(0, 15).map(summarizeEventForFeed),
     settings: state.settings,
     tiktok: state.tiktok,
@@ -671,6 +812,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       count,
       merit,
       wish,
@@ -698,6 +840,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       count,
       merit,
       ttsText: params.ttsText || ''
@@ -728,6 +871,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       count,
       merit,
       wish,
@@ -759,6 +903,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       wish,
       merit,
       ttsText,
@@ -788,6 +933,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       merit,
       visualDurationMs: 2000,
       ttsText,
@@ -817,6 +963,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       merit,
       visualDurationMs: 3000,
       ttsText,
@@ -863,6 +1010,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       giftType,
       giftName,
       coins,
@@ -897,6 +1045,7 @@ const Rituals = {
       user: devotee.name,
       uniqueId: devotee.uniqueId,
       avatar: devotee.avatar,
+      appearance: devotee.appearance,
       topic,
       fortune,
       merit,
@@ -1297,6 +1446,7 @@ function enqueueRoseRitual(ritual, ctx, count) {
   if (roseFortuneQueue.length >= ROSE_FORTUNE_QUEUE_MAX) {
     roseFortuneStats.overflowDropped += 1;
     logLine('ERROR', 'RoseFortune', `Hàng đợi nghi thức Rose đã đầy (tối đa ${ROSE_FORTUNE_QUEUE_MAX}) — nghi thức '${ritual}' của ${ctx.user} (${source}) bị từ chối thêm vào. Tổng đã quá tải: ${roseFortuneStats.overflowDropped}.`);
+    broadcastNotification('temple.state', getPublicState());
     return;
   }
   roseFortuneQueue.push({ ritual, ctx, count, source, enqueuedAt: Date.now() });
@@ -1309,22 +1459,29 @@ function enqueueRoseRitual(ritual, ctx, count) {
 // đoán giữa chừng khi combo đang tăng dần — xem lời gọi trong handleGiftEvent/cleanup bên
 // dưới, chỉ gọi hàm này khi combo đã kết thúc hoặc hết hạn chờ).
 function dispatchRoseThreshold(count, ctx) {
-  if (!roseFortuneAutoEnabled()) return;
-  const ritual = ROSE_THRESHOLD_RITUALS[count];
-  const source = eventSourceTag(ctx.uniqueId);
-  if (source === 'MOCK') roseFortuneStats.mockRosesReceived += count;
-  else roseFortuneStats.realRosesReceived += count;
+  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
+  const normalizedCtx = ctx;
+  const source = eventSourceTag(normalizedCtx.uniqueId);
+
+  // roseCount đã được cộng chính xác theo delta ngay khi nhận event (handleGiftEvent).
+  // Tắt tự động chỉ bỏ qua hoạt cảnh/TTS; donor state vẫn được broadcast ở đây.
+  if (!roseFortuneAutoEnabled()) {
+    broadcastNotification('temple.state', getPublicState());
+    return;
+  }
+
+  const ritual = ROSE_THRESHOLD_RITUALS[normalizedCount];
 
   if (!ritual) {
     logLine(
       'WARN',
       'RoseFortune',
-      `[${source}] ${ctx.user} tặng tổng ${count} Hoa Hồng (không khớp mốc 1/5/10) -> ghi nhận công đức như quà thường, không kích hoạt riêng Dâng hoa/Cầu phúc/Xin xăm.`
+      `[${source}] ${normalizedCtx.user} tặng tổng ${normalizedCount} Hoa Hồng (không khớp mốc 1/5/10) -> ghi nhận công đức như quà thường, không kích hoạt riêng Dâng hoa/Cầu phúc/Xin xăm.`
     );
-    enqueueRoseRitual('offerGiftFallback', ctx, count);
+    enqueueRoseRitual('offerGiftFallback', normalizedCtx, normalizedCount);
     return;
   }
-  enqueueRoseRitual(ritual, ctx, count);
+  enqueueRoseRitual(ritual, normalizedCtx, normalizedCount);
 }
 
 function getRoseFortunePublicStats() {
@@ -1440,6 +1597,24 @@ function handleGiftEvent(data) {
   // thresholdDispatched đảm bảo 1 combo chỉ bao giờ kích hoạt ĐÚNG MỘT nghi thức, kể cả khi
   // sự kiện kết thúc (repeatEnd) bị TikTok gửi trùng lặp trong khoảng ân hạn ở trên.
   if (isRose) {
+    // Cộng theo phần CHÊNH LỆCH mới quan sát được, không chờ repeatEnd. Nhờ vậy:
+    // - donor lên VIP ngay khi Rose đầu tiên tới;
+    // - event trùng/đến muộn với cùng count không cộng lại (deltaCount=0);
+    // - correction hợp lệ sau khi combo đã chốt (count cao hơn) vẫn cộng đúng phần bù,
+    //   dù thresholdDispatched ngăn không cho chạy nghi thức lần thứ hai.
+    if (deltaCount > 0) {
+      const donor = recordRoseDonation(entry.ctx, deltaCount);
+      entry.ctx = {
+        ...entry.ctx,
+        user: donor.name,
+        uniqueId: donor.uniqueId,
+        avatar: donor.avatar
+      };
+      const source = eventSourceTag(entry.ctx.uniqueId);
+      if (source === 'MOCK') roseFortuneStats.mockRosesReceived += deltaCount;
+      else roseFortuneStats.realRosesReceived += deltaCount;
+    }
+
     logLine(
       'INFO',
       'TikTok',
@@ -1448,6 +1623,10 @@ function handleGiftEvent(data) {
     if (entry.ended && !entry.thresholdDispatched) {
       entry.thresholdDispatched = true;
       dispatchRoseThreshold(entry.maxCount, entry.ctx);
+    } else if (deltaCount > 0) {
+      // Combo đang tiếp tục hoặc correction tới sau lần dispatch đầu: cập nhật ghế VIP
+      // ngay, không chờ timer dọn combo.
+      broadcastNotification('temple.state', getPublicState());
     }
     return;
   }

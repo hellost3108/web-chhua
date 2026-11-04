@@ -24,6 +24,11 @@ class TempleParticleEngine {
 
     this.incenseTips = [];
     this.smokeDensity = 1.0;
+    // Admin mục 11 "Bật/tắt hoạt cảnh môi trường" (ambientEffectsEnabled) chỉ tắt các hạt
+    // KHÔNG gắn với sự kiện thật (khói nhang nền, hạt bụi vàng, hoa sen rơi idle) — không
+    // đụng tới hiệu ứng PHẢN HỒI nghi thức thật (burst/soundWave/floatingText) vì đó là xác
+    // nhận trực quan cho tương tác thật của người xem, luôn phải hiển thị dù đang ở chế độ nhẹ.
+    this.ambientEnabled = true;
     this.time = 0;
     this.lastFrameTime = 0;
     this.frameInterval = 1000 / 30; // Cố định 30 FPS siêu nhẹ CPU
@@ -120,6 +125,10 @@ class TempleParticleEngine {
     this.incenseTips = Array.isArray(tips) ? tips : [];
   }
 
+  setAmbientEnabled(enabled) {
+    this.ambientEnabled = Boolean(enabled);
+  }
+
   spawnSmokeFromTips() {
     if (!this.incenseTips.length || this.smokeParticles.length >= 22) return;
     if (Math.random() > 0.45 * this.smokeDensity) return;
@@ -213,7 +222,7 @@ class TempleParticleEngine {
     ctx.clearRect(0, 0, this.width, this.height);
 
     // 1. Hạt bụi vàng (dùng drawImage từ sparkSprite đã pre-render)
-    for (let i = 0; i < this.goldSparks.length; i++) {
+    for (let i = 0; this.ambientEnabled && i < this.goldSparks.length; i++) {
       const sp = this.goldSparks[i];
       sp.y += sp.vy;
       sp.x += sp.vx + Math.sin(this.time + sp.phase) * 0.4;
@@ -226,7 +235,9 @@ class TempleParticleEngine {
     }
 
     // 2. Khói tâm hương (dùng drawImage từ smokeSprite đã pre-render)
-    this.spawnSmokeFromTips();
+    // Khi tắt hoạt cảnh môi trường: ngừng SINH khói mới, nhưng vẫn vẽ nốt khói đang bay
+    // cho tan tự nhiên — tắt phụt ngay lập tức sẽ gây giật hình khó chịu.
+    if (this.ambientEnabled) this.spawnSmokeFromTips();
     for (let i = this.smokeParticles.length - 1; i >= 0; i--) {
       const p = this.smokeParticles[i];
       p.age += 1;
@@ -254,7 +265,8 @@ class TempleParticleEngine {
       petal.rot += petal.vrot;
 
       if (petal.y > this.height + 35) {
-        if (this.lotusPetals.length > 9) {
+        // Chế độ giảm hiệu ứng: không hồi sinh cánh sen idle, để tự hết dần thay vì tắt phụt.
+        if (!this.ambientEnabled || this.lotusPetals.length > 9) {
           this.lotusPetals.splice(i, 1);
           continue;
         } else {

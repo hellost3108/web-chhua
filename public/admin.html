@@ -235,6 +235,38 @@
         <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">📋 Nhật ký nghi thức Rose gần nhất</div>
         <pre id="roseFortuneLogOutput" style="max-height:140px;">(chưa có yêu cầu nào)</pre>
       </section>
+
+      <section class="card">
+        <h2>🎛️ 8. Hiển Thị, Hiệu Ứng & Hiệu Năng (Khu VIP / Đạo Tràng / LIVE nhiều giờ)</h2>
+        <p style="font-size: 13px; color: var(--muted);">
+          Các công tắc dưới đây chỉ đổi CÁCH HIỂN THỊ (hiệu ứng, nameplate, gợi ý) — không đụng tới logic quà tặng, bảng công đức hay kết nối TikTok. Lưu lại và tải lại đúng sau khi khởi động lại server.
+        </p>
+        <div class="row">
+          <button class="btn" id="btnToggleVipEffects">✨ Hiệu Ứng Khu VIP: BẬT</button>
+          <select id="selVipIntensity">
+            <option value="low">Cường độ VIP: Thấp</option>
+            <option value="normal" selected>Cường độ VIP: Vừa</option>
+            <option value="high">Cường độ VIP: Cao</option>
+          </select>
+        </div>
+        <div class="row">
+          <select id="selVipMaxSeats">
+            <option value="4">Số chỗ VIP tối đa: 4</option>
+            <option value="5">Số chỗ VIP tối đa: 5</option>
+            <option value="6" selected>Số chỗ VIP tối đa: 6</option>
+          </select>
+          <button class="btn" id="btnToggleNameplates">🏷️ Nameplate Người Thường: BẬT</button>
+        </div>
+        <div class="row">
+          <button class="btn" id="btnToggleGuidance">💬 Gợi Ý Bình Luận: BẬT</button>
+          <button class="btn" id="btnToggleAmbient">🌫️ Hoạt Cảnh Môi Trường: BẬT</button>
+        </div>
+        <div class="row">
+          <button class="btn gold" id="btnToggleReducedEffects">🐢 Chế Độ Giảm Hiệu Ứng Khi LIVE: TẮT</button>
+        </div>
+        <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">🧪 Chạy thử lần lượt từng tình huống tương tác</div>
+        <button class="btn" id="btnDemoSequence">▶️ Demo Tuần Tự: Dâng hương → Gõ mõ → Thỉnh chuông → Cầu phúc → Xin xăm</button>
+      </section>
     </div>
   </div>
 
@@ -281,6 +313,11 @@
     let interactionsEnabled = true;
     let mockLiveEnabled = false;
     let roseFortuneEnabled = true;
+    let vipEffectsEnabled = true;
+    let regularNameplatesEnabled = true;
+    let guidanceHintsEnabled = true;
+    let ambientEffectsEnabled = true;
+    let reducedEffectsMode = false;
 
     async function refreshStatus() {
       const res = await fetch('/api/state');
@@ -332,6 +369,34 @@
       document.getElementById('roseFortuneLogOutput').textContent = rfLog.length
         ? rfLog.map((e) => `[${e.timestamp}] [${e.source}] ${e.user} -> ${e.ritualLabel || e.ritual} (${e.count} Rose)`).join('\n')
         : '(chưa có yêu cầu nào)';
+
+      // Mục 11 — đồng bộ UI của 7 công tắc Hiển thị/Hiệu ứng/Hiệu năng với state.settings
+      // thật trên server (nguồn sự thật duy nhất), giống cách interactionsEnabled/mockLiveEnabled
+      // đã làm ở trên — tránh nút hiện sai trạng thái nếu reload trang hoặc RPC thất bại.
+      const s = st.settings || {};
+      vipEffectsEnabled = s.vipEffectsEnabled !== false;
+      document.getElementById('btnToggleVipEffects').textContent =
+        `✨ Hiệu Ứng Khu VIP: ${vipEffectsEnabled ? 'BẬT' : 'TẮT'}`;
+      regularNameplatesEnabled = s.regularNameplatesEnabled !== false;
+      document.getElementById('btnToggleNameplates').textContent =
+        `🏷️ Nameplate Người Thường: ${regularNameplatesEnabled ? 'BẬT' : 'TẮT'}`;
+      guidanceHintsEnabled = s.guidanceHintsEnabled !== false;
+      document.getElementById('btnToggleGuidance').textContent =
+        `💬 Gợi Ý Bình Luận: ${guidanceHintsEnabled ? 'BẬT' : 'TẮT'}`;
+      ambientEffectsEnabled = s.ambientEffectsEnabled !== false;
+      document.getElementById('btnToggleAmbient').textContent =
+        `🌫️ Hoạt Cảnh Môi Trường: ${ambientEffectsEnabled ? 'BẬT' : 'TẮT'}`;
+      reducedEffectsMode = Boolean(s.reducedEffectsMode);
+      document.getElementById('btnToggleReducedEffects').textContent =
+        `🐢 Chế Độ Giảm Hiệu Ứng Khi LIVE: ${reducedEffectsMode ? 'BẬT' : 'TẮT'}`;
+      const selIntensity = document.getElementById('selVipIntensity');
+      if (selIntensity && document.activeElement !== selIntensity) {
+        selIntensity.value = s.vipEffectIntensity || 'normal';
+      }
+      const selMaxSeats = document.getElementById('selVipMaxSeats');
+      if (selMaxSeats && document.activeElement !== selMaxSeats) {
+        selMaxSeats.value = String(s.vipMaxSeats || 6);
+      }
     }
     refreshStatus();
     setInterval(refreshStatus, 4000);
@@ -372,6 +437,49 @@
       const groupId = `admin_rose_dup_${Date.now()}`;
       await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_hoa_sen_vang', groupId, repeatCount: 10, repeatEnd: true });
       await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_hoa_sen_vang', groupId, repeatCount: 10, repeatEnd: true });
+    };
+
+    // Mục 11 — 7 công tắc Hiển thị/Hiệu ứng/Hiệu năng, đều đi qua temple.updateSettings
+    // (đã tự merge nông vào state.settings ở server, xem Rituals.updateSettings).
+    document.getElementById('btnToggleVipEffects').onclick = async () => {
+      await sendRpc('temple.updateSettings', { vipEffectsEnabled: !vipEffectsEnabled });
+    };
+    document.getElementById('btnToggleNameplates').onclick = async () => {
+      await sendRpc('temple.updateSettings', { regularNameplatesEnabled: !regularNameplatesEnabled });
+    };
+    document.getElementById('btnToggleGuidance').onclick = async () => {
+      await sendRpc('temple.updateSettings', { guidanceHintsEnabled: !guidanceHintsEnabled });
+    };
+    document.getElementById('btnToggleAmbient').onclick = async () => {
+      await sendRpc('temple.updateSettings', { ambientEffectsEnabled: !ambientEffectsEnabled });
+    };
+    document.getElementById('btnToggleReducedEffects').onclick = async () => {
+      await sendRpc('temple.updateSettings', { reducedEffectsMode: !reducedEffectsMode });
+    };
+    document.getElementById('selVipIntensity').onchange = async (e) => {
+      await sendRpc('temple.updateSettings', { vipEffectIntensity: e.target.value });
+    };
+    document.getElementById('selVipMaxSeats').onchange = async (e) => {
+      await sendRpc('temple.updateSettings', { vipMaxSeats: Number(e.target.value) });
+    };
+
+    // Mục 11 "Nút kiểm tra lần lượt các tình huống tương tác" — chạy tuần tự, cách nhau
+    // đủ xa để không chồng hiệu ứng/TTS (xem quy tắc hàng đợi ở mục 7 tài liệu thiết kế).
+    document.getElementById('btnDemoSequence').onclick = async () => {
+      const btn = document.getElementById('btnDemoSequence');
+      btn.disabled = true;
+      const steps = [
+        ['temple.burnIncense', { count: 3 }],
+        ['temple.strikeWoodenFish', { count: 9 }],
+        ['temple.ringBell', { count: 1, readTts: false }],
+        ['temple.sendPrayer', {}],
+        ['temple.drawFortune', {}]
+      ];
+      for (const [method, params] of steps) {
+        await sendRpc(method, params);
+        await new Promise((resolve) => setTimeout(resolve, 3500));
+      }
+      btn.disabled = false;
     };
   </script>
 </body>
