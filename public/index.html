@@ -48,12 +48,11 @@
         <!-- HÀO QUANG ĐÀI SEN TRÊN TAY ĐỨC PHẬT A DI ĐÀ -->
         <div class="lotus-hand-halo" id="lotusHandHalo"></div>
 
-        <!-- 2. THANH TRẠNG THÁI MỎNG TRÊN ĐỈNH (KHÔNG CHE TƯỢNG PHẬT) -->
+        <!-- 2. THANH TRẠNG THÁI MỎNG TRÊN ĐỈNH (KHÔNG CHE TƯỢNG PHẬT)
+             Khối trạng thái kết nối TikTok (LIVE @username · xx mắt) KHÔNG còn hiển thị ở
+             đây — đã dời vào Bảng Điều Khiển Nhanh (chỉ Admin thấy, tự ẩn khi ?obs=1) để
+             overlay LIVE thật không còn lặp lại thông tin người xem/LIVE của chính TikTok. -->
         <header class="minimal-top-bar">
-          <div class="live-pill" id="liveStatusPill">
-            <span class="live-dot" id="liveDot"></span>
-            <span id="liveStatusText">CHÙA LINH ỨNG • ĐỨC PHẬT A DI ĐÀ</span>
-          </div>
           <div class="top-Right-badges">
             <div class="mini-stat-pill">
               🔥 <strong id="statIncense">108</strong> hương • ✨ <strong id="statMerit">1,080</strong> CĐ
@@ -123,51 +122,38 @@
         <!-- 9. LỚP CANVAS HIỆU ỨNG KHÓI HƯƠNG, HOA SEN RƠI & SÓNG ÂM -->
         <canvas id="templeCanvas"></canvas>
 
-        <!-- 10. THANH HUD GỌN GÀNG DƯỚI ĐÁY (GIỐNG MẪU THAM CHIẾU) -->
-        <footer class="bottom-hud-bar">
-          <!-- Bên trái: Thông báo hành lễ + 3 ô hướng dẫn tương tác -->
-          <div class="hud-left-col">
-            <div class="hud-active-notice" id="hudActiveNotice">
-              <span class="flower-bullet">💮</span>
-              <strong id="devoteeNameLine">Thí Chủ Minh Tâm</strong>
-              <span>—</span>
-              <span id="devoteeActionTag">Dâng hương cầu bình an</span>
-              <span class="flower-bullet">💮</span>
-            </div>
-
-            <div class="hud-gift-cards">
-              <div class="hud-gift-card" id="cardIncense" title="1 Hoa Hồng — Dâng hoa">
-                <div class="gift-coin-tag">🌹 1 HOA HỒNG</div>
-                <div class="gift-card-body">
-                  <span class="gift-emoji">🌹</span>
-                  <span class="gift-title">DÂNG HOA</span>
-                </div>
-              </div>
-
-              <div class="hud-gift-card" id="cardBlessing" title="5 Hoa Hồng — Cầu phúc">
-                <div class="gift-coin-tag">🌹 5 HOA HỒNG</div>
-                <div class="gift-card-body">
-                  <span class="gift-emoji">🌹</span>
-                  <span class="gift-title">CẦU PHÚC</span>
-                </div>
-              </div>
-
-              <div class="hud-gift-card" id="cardLotus" title="10 Hoa Hồng — Xin xăm">
-                <div class="gift-coin-tag">🌹 10 HOA HỒNG</div>
-                <div class="gift-card-body">
-                  <span class="gift-emoji">🌹</span>
-                  <span class="gift-title">XIN XĂM</span>
-                </div>
-              </div>
+        <!-- 10. GÓC TRÊN TRÁI: 3 Ô HÀNH ĐỘNG DÂNG HOA / CẦU PHÚC / XIN XĂM (V3: KHÔNG Ở ĐÁY) -->
+        <div class="top-action-panel" id="topActionPanel">
+          <div class="hud-gift-card" id="cardIncense" title="1 Hoa Hồng — Dâng hoa">
+            <div class="gift-coin-tag">🌹 1 HOA HỒNG</div>
+            <div class="gift-card-body">
+              <span class="gift-emoji">🌹</span>
+              <span class="gift-title">DÂNG HOA</span>
             </div>
           </div>
 
-          <!-- Bên phải: Bảng TẤM LÒNG THÀNH (Top Công Đức) -->
-          <div class="hud-right-leaderboard">
-            <div class="hud-lb-header">TẤM LÒNG THÀNH</div>
-            <div class="hud-lb-list" id="leaderboardList"></div>
+          <div class="hud-gift-card" id="cardBlessing" title="5 Hoa Hồng — Cầu phúc">
+            <div class="gift-coin-tag">🌹 5 HOA HỒNG</div>
+            <div class="gift-card-body">
+              <span class="gift-emoji">🌹</span>
+              <span class="gift-title">CẦU PHÚC</span>
+            </div>
           </div>
-        </footer>
+
+          <div class="hud-gift-card" id="cardLotus" title="10 Hoa Hồng — Xin xăm">
+            <div class="gift-coin-tag">🌹 10 HOA HỒNG</div>
+            <div class="gift-card-body">
+              <span class="gift-emoji">🌹</span>
+              <span class="gift-title">XIN XĂM</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- GÓC TRÊN PHẢI: BẢNG TẤM LÒNG THÀNH (Top Công Đức) -->
+        <div class="top-leaderboard-panel" id="topLeaderboardPanel">
+          <div class="hud-lb-header">TẤM LÒNG THÀNH</div>
+          <div class="hud-lb-list" id="leaderboardList"></div>
+        </div>
 
         <!-- BANNER ĐẠI LỄ KIM LONG CHẦU PHẬT -->
         <div class="grand-ceremony-banner" id="grandCeremonyBanner">
@@ -224,6 +210,12 @@
 
       <div class="dock-section">
         <div class="dock-section-title">📡 Kết Nối Phòng TikTok Live</div>
+        <!-- Trạng thái kết nối (chỉ Admin thấy ở đây — KHÔNG còn hiển thị trên overlay
+             LIVE thật, xem ghi chú tại .minimal-top-bar trong phần hoạt cảnh chính). -->
+        <div class="live-pill" id="liveStatusPill">
+          <span class="live-dot" id="liveDot"></span>
+          <span id="liveStatusText">CHÙA LINH ỨNG • ĐỨC PHẬT A DI ĐÀ</span>
+        </div>
         <div class="dock-input-row">
           <input type="text" id="inputTikTokUser" class="dock-input" value="@zenfacts_vn" placeholder="Nhập @username hoặc link TikTok Live..." />
           <button class="dock-btn gold" id="btnConnectTikTok">Kết Nối</button>

@@ -127,11 +127,14 @@
     const colsPerSide = 4;
     for (let r = 0; r < rows; r++) {
       const progress = r / (rows - 1); // 0 (xa) -> 1 (gần)
-      // Hàng gần nhất (progress=1) phải có chân (điểm neo) nằm TRÊN vùng an toàn phía dưới
-      // (--safe-bottom trong live.css, hiện 380px) để không bị 3 ô Dâng hoa/Cầu phúc/Xin
-      // xăm + bảng TẤM LÒNG THÀNH che mất — nếu chỉnh --safe-bottom lớn hơn trong CSS, hãy
-      // giảm mốc 1300 dưới đây tương ứng.
-      const y = Math.round(1100 + progress * 200); // 1100 -> 1300
+      // Đạo tràng người xem CHƯA tặng hoa được dời xuống thấp hơn bục đệm quỳ VIP (y=1188
+      // trong VIP_CUSHION_COORDS) để chừa khoảng trống thoáng hơn ngay dưới bàn thờ/các nút
+      // Thỉnh Chuông-Gõ Mõ-Xin Xăm (quanh y=895-975) và cho thấy rõ "đường lên chính điện"
+      // khi có người thật hiện Dâng hoa/Cầu phúc/Xin xăm. Hàng gần nhất (progress=1) vẫn
+      // phải có chân (điểm neo) nằm TRÊN vùng an toàn phía dưới (--safe-bottom trong live.css,
+      // hiện 380px, tức y=1540) để không bị khung bình luận/nút quà tặng THẬT của TikTok che
+      // mất — nếu chỉnh --safe-bottom lớn hơn trong CSS, hãy giảm mốc 1410 dưới đây tương ứng.
+      const y = Math.round(1210 + progress * 200); // 1210 -> 1410
       const scale = +(0.76 + progress * 0.28).toFixed(2);
 
       // Cánh trái thảm đỏ
@@ -370,22 +373,6 @@
       lotusFlareTimer = setTimeout(() => lotusHand.classList.remove('flare'), 3600);
     }
     particles.spawnBellWave(540, 260, 2);
-
-    // Cập nhật dòng thông báo dưới thanh HUD
-    const hudName = document.getElementById('devoteeNameLine');
-    const hudAct = document.getElementById('devoteeActionTag');
-    if (hudName) hudName.textContent = user || 'Thí Chủ';
-    if (hudAct) hudAct.textContent = actionLabel || 'Dâng hương';
-  }
-
-  // Bình luận: CHỈ cập nhật dòng thông báo trên thanh HUD (nickname + nội dung) — không gọi
-  // updateCentralWorshipper (tránh kích hoạt hào quang/cột sáng/Đảnh lễ vốn dành riêng cho
-  // nghi thức thật) và không di chuyển nhân vật lên chính điện.
-  function showCommentTicker(user, comment) {
-    const hudName = document.getElementById('devoteeNameLine');
-    const hudAct = document.getElementById('devoteeActionTag');
-    if (hudName) hudName.textContent = user || 'Thí Chủ';
-    if (hudAct) hudAct.textContent = comment ? `💬 ${comment}` : 'Đã vào Chánh Điện';
   }
 
   // 6. Cập nhật toàn bộ giao diện theo State từ Server
@@ -525,11 +512,12 @@
   function triggerRitualVisuals(ev) {
     if (!ev) return;
 
-    // Bình luận CHỈ đưa người xem "vào chùa" (hiện nickname + nội dung trên thanh HUD) —
-    // KHÔNG chạy qua bất kỳ hoạt cảnh nghi thức nào (không lên chính điện, không TTS, không
-    // cộng công đức) dù nội dung trùng từ khóa nghi thức (xem parseViewerComment ở server).
+    // Bình luận CHỈ đưa người xem "vào chùa" (ngồi vào ghế đạo tràng, xem renderCongregationHall,
+    // và vào Nhật Ký Tương Tác #eventFeed trong Bảng Điều Khiển Nhanh) — KHÔNG chạy qua bất kỳ
+    // hoạt cảnh nghi thức nào (không lên chính điện, không TTS, không cộng công đức) dù nội
+    // dung trùng từ khóa nghi thức (xem parseViewerComment ở server), và không hiển thị gì
+    // thêm trên overlay LIVE công khai (dải tên/trạng thái dạng thanh ngang đã được bỏ).
     if (ev.type === 'viewerComment') {
-      showCommentTicker(ev.user, ev.comment);
       return;
     }
 
