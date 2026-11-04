@@ -5,6 +5,16 @@
   --gold-deep: #b87e14;
   --ivory: #fff8eb;
   --muted-gold: #d8be92;
+
+  /* Vùng an toàn tham khảo cho khung 9:16 chuẩn TikTok LIVE/OBS (1080x1920 logic) — che bởi
+     UI riêng của app TikTok (thanh LIVE/viewer phía trên, khung bình luận + nút tương tác
+     phía dưới). Các mốc dưới đây là GIÁ TRỊ THAM KHẢO ban đầu theo khuyến nghị vận hành,
+     KHÔNG PHẢI vùng an toàn cố định — hãy đối chiếu lại với ảnh Preview thật trong TikTok
+     LIVE Studio của tài khoản đang phát rồi chỉnh lại đúng 4 biến này nếu cần. */
+  --safe-top: 150px;
+  --safe-bottom: 380px;
+  --safe-left: 24px;
+  --safe-right: 24px;
 }
 
 * {
@@ -217,9 +227,9 @@ body.obs-mode .stage-wrapper {
 /* 2. THANH TRẠNG THÁI MỎNG TRÊN ĐỈNH (KHÔNG DÙNG BACKDROP-FILTER) */
 .minimal-top-bar {
   position: absolute;
-  top: 18px;
-  left: 24px;
-  right: 24px;
+  top: var(--safe-top);
+  left: var(--safe-left);
+  right: var(--safe-right);
   z-index: 20;
   display: flex;
   align-items: center;
@@ -744,9 +754,9 @@ body.obs-mode .stage-wrapper {
    ========================================================================== */
 .bottom-hud-bar {
   position: absolute;
-  bottom: 20px;
-  left: 24px;
-  right: 24px;
+  bottom: var(--safe-bottom);
+  left: var(--safe-left);
+  right: var(--safe-right);
   height: 192px;
   z-index: 20;
   display: grid;

@@ -73,15 +73,17 @@ test('Phase 6 - RPC method regression smoke test', async (t) => {
     assert.equal(res.result.settings.smokeDensity, 0.5);
   });
 
-  await t.test('temple.comment phân loại đúng ý định (xin xăm, chuông, mõ, hương, cầu)', async () => {
+  await t.test('temple.comment CHỈ đưa người xem vào chùa, không tự kích hoạt nghi thức dù trùng từ khóa', async () => {
     // Mỗi lệnh dùng uniqueId riêng để không bị chặn bởi cooldown chống spam bình luận
-    // (3.5s/người) — đây là test phân loại ý định, không phải test cooldown.
+    // (3.5s/người) — đây là test hành vi bình luận, không phải test cooldown.
     const r1 = await server.rpc('temple.comment', { comment: 'con xin xem que dau nam', user: 'A', uniqueId: 'cmt_test_1' });
-    assert.equal(r1.result.event.type, 'drawFortune');
+    assert.equal(r1.result.event.type, 'viewerComment');
+    assert.equal(r1.result.event.merit, 0, 'bình luận không được tạo công đức');
     const r2 = await server.rpc('temple.comment', { comment: 'thinh chuong cau may', user: 'A', uniqueId: 'cmt_test_2' });
-    assert.equal(r2.result.event.type, 'ringBell');
-    const r3 = await server.rpc('temple.comment', { comment: 'go mo tung kinh', user: 'A', uniqueId: 'cmt_test_3' });
-    assert.equal(r3.result.event.type, 'strikeWoodenFish');
+    assert.equal(r2.result.event.type, 'viewerComment');
+    const r3 = await server.rpc('temple.comment', { comment: 'go mo tung kinh dang huong', user: 'A', uniqueId: 'cmt_test_3' });
+    assert.equal(r3.result.event.type, 'viewerComment');
+    assert.equal(r3.result.event.comment, 'go mo tung kinh dang huong');
   });
 
   await t.test('temple.comment lọc được spam/toxic (không ném lỗi, trả null)', async () => {

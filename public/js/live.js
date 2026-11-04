@@ -127,7 +127,11 @@
     const colsPerSide = 4;
     for (let r = 0; r < rows; r++) {
       const progress = r / (rows - 1); // 0 (xa) -> 1 (gần)
-      const y = Math.round(1290 + progress * 355); // 1290 -> 1645
+      // Hàng gần nhất (progress=1) phải có chân (điểm neo) nằm TRÊN vùng an toàn phía dưới
+      // (--safe-bottom trong live.css, hiện 380px) để không bị 3 ô Dâng hoa/Cầu phúc/Xin
+      // xăm + bảng TẤM LÒNG THÀNH che mất — nếu chỉnh --safe-bottom lớn hơn trong CSS, hãy
+      // giảm mốc 1300 dưới đây tương ứng.
+      const y = Math.round(1100 + progress * 200); // 1100 -> 1300
       const scale = +(0.76 + progress * 0.28).toFixed(2);
 
       // Cánh trái thảm đỏ
@@ -374,6 +378,16 @@
     if (hudAct) hudAct.textContent = actionLabel || 'Dâng hương';
   }
 
+  // Bình luận: CHỈ cập nhật dòng thông báo trên thanh HUD (nickname + nội dung) — không gọi
+  // updateCentralWorshipper (tránh kích hoạt hào quang/cột sáng/Đảnh lễ vốn dành riêng cho
+  // nghi thức thật) và không di chuyển nhân vật lên chính điện.
+  function showCommentTicker(user, comment) {
+    const hudName = document.getElementById('devoteeNameLine');
+    const hudAct = document.getElementById('devoteeActionTag');
+    if (hudName) hudName.textContent = user || 'Thí Chủ';
+    if (hudAct) hudAct.textContent = comment ? `💬 ${comment}` : 'Đã vào Chánh Điện';
+  }
+
   // 6. Cập nhật toàn bộ giao diện theo State từ Server
   let hasInitializedRealLeader = false;
 
@@ -491,8 +505,14 @@
       case 'offerGift':
       case 'grandCeremony':
         return `🪷 <strong>${escapeHtml(ev.user)}</strong> dâng <em>${escapeHtml(ev.giftName)}</em> (+${ev.merit} CĐ)`;
+      case 'offerFlower':
+        return `🌹 <strong>${escapeHtml(ev.user)}</strong> dâng hoa (+${ev.merit} CĐ)`;
+      case 'blessingRose':
+        return `🌸 <strong>${escapeHtml(ev.user)}</strong> gửi lời cầu phúc (+${ev.merit} CĐ)`;
       case 'drawFortune':
         return `🎋 <strong>${escapeHtml(ev.user)}</strong> gieo được Quẻ số ${ev.fortune?.number} (${ev.fortune?.rank})`;
+      case 'viewerComment':
+        return `💬 <strong>${escapeHtml(ev.user)}</strong>: ${escapeHtml(ev.comment || '')}`;
       default:
         return `✨ <strong>${escapeHtml(ev.user || 'Thí chủ')}</strong> tương tác`;
     }
@@ -504,6 +524,14 @@
 
   function triggerRitualVisuals(ev) {
     if (!ev) return;
+
+    // Bình luận CHỈ đưa người xem "vào chùa" (hiện nickname + nội dung trên thanh HUD) —
+    // KHÔNG chạy qua bất kỳ hoạt cảnh nghi thức nào (không lên chính điện, không TTS, không
+    // cộng công đức) dù nội dung trùng từ khóa nghi thức (xem parseViewerComment ở server).
+    if (ev.type === 'viewerComment') {
+      showCommentTicker(ev.user, ev.comment);
+      return;
+    }
 
     if (ev.ttsText && ev.type !== 'drawFortune') {
       audio.enqueueTts(ev.ttsText, { voice: ev.ttsVoice || 'maichi' });
@@ -548,6 +576,25 @@
         particles.spawnIncenseBurst(540, 895);
         particles.spawnFloatingMerit(`+${ev.merit} Công Đức`, 540, 840, '#fff3b0');
         animateWalkerOnCarpet(ev.user, ev.avatar, `🪷 Dâng ${ev.giftName} (+${ev.merit} CĐ)`, ev.wish);
+        break;
+      }
+
+      // 1 Hoa Hồng -> Dâng hoa: hoạt cảnh ngắn gọn (~2s) lên chính điện dâng bó hoa rồi về chỗ.
+      case 'offerFlower': {
+        audio.playIncenseChime();
+        particles.spawnFloatingMerit(`+${ev.merit} Công Đức`, 540, 860, '#ff9eb0');
+        animateWalkerOnCarpet(ev.user, ev.avatar, `🌹 Dâng hoa (+${ev.merit} CĐ)`, 'Thành tâm dâng hoa kính lễ');
+        break;
+      }
+
+      // 5 Hoa Hồng -> Cầu phúc: hiệu ứng ánh sáng nhẹ (beam/halo flare có sẵn trong
+      // updateCentralWorshipper) + hoa, ~3s, KHÔNG dùng hiệu ứng đèn hoa đăng của sendPrayer.
+      case 'blessingRose': {
+        audio.playIncenseChime();
+        audio.playTempleBell(0.7);
+        particles.spawnBellWave(540, 700, 3);
+        particles.spawnFloatingMerit(`+${ev.merit} Công Đức`, 540, 860, '#ffe9a8');
+        animateWalkerOnCarpet(ev.user, ev.avatar, `🌸 Cầu phúc (+${ev.merit} CĐ)`, 'Cầu bình an cho bạn và gia đình');
         break;
       }
 
@@ -725,25 +772,19 @@
     callRpc('temple.burnIncense', { user, count: 3, wish });
   });
 
+  // 3 ô Dâng hoa / Cầu phúc / Xin xăm: mô phỏng ĐÚNG qua pipeline Rose thật (live.mockEvent
+  // gift, diamondCount=1) thay vì gọi thẳng Rituals.*, để nút bấm xem thử trên desktop cũng
+  // đi qua cùng cơ chế mốc 1/5/10 với quà Rose thật trên TikTok.
   document.getElementById('cardIncense')?.addEventListener('click', () => {
-    const { user, wish } = getFormInput();
-    callRpc('temple.burnIncense', { user, count: 3, wish });
+    callRpc('live.mockEvent', { type: 'gift', diamondCount: 1, repeatCount: 1, repeatEnd: true });
   });
 
   document.getElementById('cardBlessing')?.addEventListener('click', () => {
-    const { user, wish } = getFormInput();
-    callRpc('temple.sendPrayer', { user, wish });
+    callRpc('live.mockEvent', { type: 'gift', diamondCount: 1, repeatCount: 5, repeatEnd: true });
   });
 
   document.getElementById('cardLotus')?.addEventListener('click', () => {
-    const { user, wish } = getFormInput();
-    callRpc('temple.offerGift', {
-      user,
-      giftType: 'lotus',
-      coins: 20,
-      giftName: 'Đài Hoa Sen Vàng',
-      wish
-    });
+    callRpc('live.mockEvent', { type: 'gift', diamondCount: 1, repeatCount: 10, repeatEnd: true });
   });
 
   document.getElementById('woodenFishStation')?.addEventListener('click', () => {

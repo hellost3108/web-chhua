@@ -179,7 +179,7 @@
           <button class="btn gold" id="btnSendComment">Gửi Comment</button>
         </div>
         <p style="font-size: 13px; color: var(--muted);">
-          Từ khóa tự động nhận diện: <code>thắp hương</code>, <code>bái phật</code>, <code>cầu ...</code>, <code>xin xăm / gieo quẻ</code>, <code>thỉnh chuông</code>, <code>gõ mõ</code>.
+          Bình luận CHỈ đưa người xem vào chùa (hiện nickname + nội dung) — không còn tự kích hoạt nghi thức nào, kể cả khi chứa từ khóa như "xin xăm", "dâng hương"... Chỉ quà Hoa Hồng (mục 7 bên dưới) mới kích hoạt nghi thức.
         </p>
       </section>
 
@@ -216,19 +216,23 @@
       </section>
 
       <section class="card">
-        <h2>🌹 7. Tự Động Xin Xăm Khi Nhận Hoa Hồng (Rose)</h2>
+        <h2>🌹 7. Hoa Hồng (Rose) Theo Mốc 1 / 5 / 10 — Dâng Hoa / Cầu Phúc / Xin Xăm</h2>
         <p style="font-size: 13px; color: var(--muted);">
-          Mỗi Hoa Hồng (Rose, quà 1 xu) hợp lệ nhận được sẽ tự tạo 1 yêu cầu xin xăm, xếp hàng xử lý tuần tự (không chồng lên nhau khi combo lớn). Không ảnh hưởng đến công đức/dâng cúng vốn vẫn tính như cũ.
+          1 Hoa Hồng → Dâng hoa · 5 Hoa Hồng → Cầu phúc · 10 Hoa Hồng → Xin xăm. Chỉ kích hoạt khi TỔNG số Rose cuối cùng của 1 lượt/combo khớp đúng 1 mốc. Bình luận KHÔNG còn tự kích hoạt nghi thức nào (chỉ đưa người xem vào chùa).
         </p>
         <div id="roseFortuneSummary" style="font-size: 13px; color: var(--muted); line-height: 1.8;">Đang tải...</div>
         <div class="row">
-          <button class="btn" id="btnToggleRoseFortune">⏸️ Tạm Dừng Tự Động Xin Xăm (Rose)</button>
+          <button class="btn" id="btnToggleRoseFortune">⏸️ Tạm Dừng Tự Động Rose</button>
         </div>
         <div class="action-grid">
-          <button class="btn gold" onclick="sendMockRose(1)">🌹 Mock: Tặng 1 Rose</button>
-          <button class="btn" id="btnMockRoseCombo">🌹🌹🌹 Mock: Combo Rose 1→2→3</button>
+          <button class="btn gold" onclick="sendMockRose(1)">🌹 Mock: 1 Rose (Dâng hoa)</button>
+          <button class="btn gold" onclick="sendMockRose(5)">🌹 Mock: 5 Rose (Cầu phúc)</button>
+          <button class="btn gold" onclick="sendMockRose(10)">🌹 Mock: 10 Rose (Xin xăm)</button>
+          <button class="btn" onclick="sendMockRose(3)">🌹 Mock: 3 Rose (không khớp mốc)</button>
+          <button class="btn" id="btnMockRoseCombo">🌹🌹🌹 Mock: Combo tăng dần 1→3→5</button>
+          <button class="btn" id="btnMockRoseDup">🔁 Mock: Gửi trùng event kết thúc (10 Rose)</button>
         </div>
-        <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">📋 Nhật ký xin xăm gần nhất</div>
+        <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">📋 Nhật ký nghi thức Rose gần nhất</div>
         <pre id="roseFortuneLogOutput" style="max-height:140px;">(chưa có yêu cầu nào)</pre>
       </section>
     </div>
@@ -309,19 +313,24 @@
         : '(chưa có lỗi nào)';
 
       const rf = st.roseFortune || {};
+      const comp = rf.completed || {};
+      const tally = (t) => `Thật ${t?.real ?? 0} / Mock ${t?.mock ?? 0}`;
       roseFortuneEnabled = rf.enabled !== false;
       document.getElementById('btnToggleRoseFortune').textContent =
-        roseFortuneEnabled ? '⏸️ Tạm Dừng Tự Động Xin Xăm (Rose)' : '▶️ Bật Lại Tự Động Xin Xăm (Rose)';
+        roseFortuneEnabled ? '⏸️ Tạm Dừng Tự Động Rose' : '▶️ Bật Lại Tự Động Rose';
       document.getElementById('roseFortuneSummary').innerHTML = [
         `⚙️ Tính năng: <strong>${roseFortuneEnabled ? 'ĐANG BẬT' : 'ĐÃ TẠM DỪNG'}</strong>`,
-        `🌹 Rose thật đã nhận: <strong>${rf.realReceived ?? 0}</strong> | Rose Mock: <strong>${rf.mockReceived ?? 0}</strong>`,
-        `⏳ Đang chờ xin xăm: <strong>${rf.pending ?? 0}</strong>`,
-        `✅ Đã hoàn thành — Thật: <strong>${rf.completedReal ?? 0}</strong> | Mock: <strong>${rf.completedMock ?? 0}</strong>`,
+        `🌹 Tổng Rose đã nhận — Thật: <strong>${rf.realRosesReceived ?? 0}</strong> | Mock: <strong>${rf.mockRosesReceived ?? 0}</strong>`,
+        `⏳ Đang chờ trong hàng đợi: <strong>${rf.pending ?? 0}</strong>`,
+        `💐 Dâng hoa (mốc 1): <strong>${tally(comp.offerFlower)}</strong>`,
+        `🌸 Cầu phúc (mốc 5): <strong>${tally(comp.blessingRose)}</strong>`,
+        `🎋 Xin xăm (mốc 10): <strong>${tally(comp.drawFortune)}</strong>`,
+        `❔ Không khớp mốc (fallback dâng quà thường): <strong>${tally(comp.offerGiftFallback)}</strong>`,
         `⚠️ Quá tải hàng đợi (bị từ chối thêm): <strong>${rf.overflowDropped ?? 0}</strong>`
       ].join('<br>');
       const rfLog = rf.recentLog || [];
       document.getElementById('roseFortuneLogOutput').textContent = rfLog.length
-        ? rfLog.map((e) => `[${e.timestamp}] [${e.source}] ${e.user} đã được xin xăm`).join('\n')
+        ? rfLog.map((e) => `[${e.timestamp}] [${e.source}] ${e.user} -> ${e.ritualLabel || e.ritual} (${e.count} Rose)`).join('\n')
         : '(chưa có yêu cầu nào)';
     }
     refreshStatus();
@@ -356,8 +365,13 @@
     document.getElementById('btnMockRoseCombo').onclick = async () => {
       const groupId = `admin_rose_combo_${Date.now()}`;
       await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 1 });
-      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 2 });
-      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 3, repeatEnd: true });
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 3 });
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 5, repeatEnd: true });
+    };
+    document.getElementById('btnMockRoseDup').onclick = async () => {
+      const groupId = `admin_rose_dup_${Date.now()}`;
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_hoa_sen_vang', groupId, repeatCount: 10, repeatEnd: true });
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_hoa_sen_vang', groupId, repeatCount: 10, repeatEnd: true });
     };
   </script>
 </body>

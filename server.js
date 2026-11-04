@@ -589,6 +589,7 @@ function summarizeEventForFeed(ev) {
   if (ev.count !== undefined) slim.count = ev.count;
   if (ev.wish !== undefined) slim.wish = ev.wish;
   if (ev.giftName !== undefined) slim.giftName = ev.giftName;
+  if (ev.comment !== undefined) slim.comment = ev.comment;
   if (ev.fortune) slim.fortune = { number: ev.fortune.number, rank: ev.fortune.rank };
   return slim;
 }
@@ -734,6 +735,64 @@ const Rituals = {
       avatar: devotee.avatar,
       wish,
       merit,
+      ttsText,
+      ttsVoice: state.settings.ttsVoice || 'maichi'
+    });
+
+    saveState();
+    broadcastNotification('temple.event', { event, state: getPublicState() });
+    return { event, state: getPublicState() };
+  },
+
+  // Nghi thức "Dâng hoa" — kích hoạt khi 1 lượt/combo Rose kết thúc với TỔNG đúng 1 Hoa Hồng
+  // (xem dispatchRoseThreshold). Avatar rời chỗ ngồi lên chính điện dâng bó hoa ngắn gọn
+  // (~2 giây) rồi trở lại chỗ ngồi — tái sử dụng animateWalkerOnCarpet hiện có bên live.js.
+  offerFlower(params = {}) {
+    const user = sanitizeUserName(params.user);
+    const uniqueId = params.uniqueId || '';
+    const avatar = params.avatar || '';
+    const merit = 15;
+
+    const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 1, '');
+
+    const ttsText = `Cảm ơn bạn ${devotee.name} đã dâng hoa. Chúc bạn một ngày an lành.`;
+
+    const event = pushEventLog({
+      type: 'offerFlower',
+      user: devotee.name,
+      uniqueId: devotee.uniqueId,
+      avatar: devotee.avatar,
+      merit,
+      visualDurationMs: 2000,
+      ttsText,
+      ttsVoice: state.settings.ttsVoice || 'maichi'
+    });
+
+    saveState();
+    broadcastNotification('temple.event', { event, state: getPublicState() });
+    return { event, state: getPublicState() };
+  },
+
+  // Nghi thức "Cầu phúc" — kích hoạt khi 1 lượt/combo Rose kết thúc với TỔNG đúng 5 Hoa Hồng.
+  // Avatar lên chính điện, hiệu ứng ánh sáng nhẹ + hoa trong ~3 giây (tái sử dụng beam/halo
+  // flare sẵn có trong updateCentralWorshipper), rồi trở lại chỗ ngồi.
+  blessingRose(params = {}) {
+    const user = sanitizeUserName(params.user);
+    const uniqueId = params.uniqueId || '';
+    const avatar = params.avatar || '';
+    const merit = 40;
+
+    const devotee = recordDevotee(user, uniqueId, avatar, merit, 0, 1, '');
+
+    const ttsText = `Bạn ${devotee.name} vừa gửi lời cầu phúc. Chúc bạn và gia đình luôn bình an.`;
+
+    const event = pushEventLog({
+      type: 'blessingRose',
+      user: devotee.name,
+      uniqueId: devotee.uniqueId,
+      avatar: devotee.avatar,
+      merit,
+      visualDurationMs: 3000,
       ttsText,
       ttsVoice: state.settings.ttsVoice || 'maichi'
     });
@@ -965,66 +1024,24 @@ function parseViewerComment(commentText, user, uniqueId, avatar) {
   }
 
   const cleanUser = sanitizeUserName(user);
-  const lower = cleanWish.toLowerCase();
 
-  // 1. Xin xăm / Gieo quẻ
-  if (
-    lower.includes('xin xăm') ||
-    lower.includes('xin xam') ||
-    lower.includes('gieo quẻ') ||
-    lower.includes('gieo que') ||
-    lower.includes('rút quẻ') ||
-    lower.includes('rut que') ||
-    lower.includes('quẻ') ||
-    lower.includes('que')
-  ) {
-    return Rituals.drawFortune({ user: cleanUser, uniqueId, avatar, topic: cleanWish });
-  }
-
-  // 2. Thỉnh chuông
-  if (lower.includes('chuông') || lower.includes('chuong') || lower.includes('thỉnh chuông')) {
-    return Rituals.ringBell({ user: cleanUser, uniqueId, avatar, count: 1, wish: cleanWish, readTts: true });
-  }
-
-  // 3. Gõ mõ
-  if (lower.includes('gõ mõ') || lower.includes('go mo') || lower.includes('tụng kinh')) {
-    return Rituals.strikeWoodenFish({ user: cleanUser, uniqueId, avatar, count: 3 });
-  }
-
-  // 4. Thắp hương / Bái Phật
-  if (
-    lower.includes('thắp hương') ||
-    lower.includes('thap huong') ||
-    lower.includes('dâng hương') ||
-    lower.includes('dang huong') ||
-    lower.includes('bái phật') ||
-    lower.includes('bai phat') ||
-    lower.includes('lạy phật') ||
-    lower.includes('lay phat')
-  ) {
-    return Rituals.burnIncense({ user: cleanUser, uniqueId, avatar, count: 3, wish: cleanWish });
-  }
-
-  // 5. Cầu nguyện / Thả đèn hoa đăng
-  if (
-    lower.includes('cầu') ||
-    lower.includes('cau ') ||
-    lower.includes('nguyện') ||
-    lower.includes('nguyen') ||
-    lower.includes('nam mô') ||
-    lower.includes('nam mo') ||
-    lower.includes('mô phật') ||
-    lower.includes('mo phat') ||
-    lower.includes('a di đà') ||
-    lower.includes('a di da') ||
-    lower.includes('bình an') ||
-    lower.includes('tài lộc') ||
-    lower.includes('chúc')
-  ) {
-    return Rituals.sendPrayer({ user: cleanUser, uniqueId, avatar, wish: cleanWish });
-  }
-
-  return Rituals.burnIncense({ user: cleanUser, uniqueId, avatar, count: 1, wish: cleanWish });
+  // Bình luận CHỈ đưa người xem vào chùa (vào chỗ ngồi còn trống, hiển thị nickname + nội
+  // dung bình luận) — KHÔNG tự kích hoạt bất kỳ nghi thức trả quà nào (dâng hương, xin xăm,
+  // cầu phúc, thỉnh chuông, gõ mõ...) dù bình luận chứa từ khóa trùng tên nghi thức. Chỉ quà
+  // Hoa Hồng (xem dispatchRoseThreshold) mới kích hoạt 3 nghi thức Dâng hoa/Cầu phúc/Xin xăm.
+  // meritDelta = 0: bình luận không tạo công đức, tránh lẫn với nguồn công đức chính (Rose).
+  const devotee = recordDevotee(cleanUser, uniqueId, avatar, 0, 0, 0, cleanWish);
+  const event = pushEventLog({
+    type: 'viewerComment',
+    user: devotee.name,
+    uniqueId: devotee.uniqueId,
+    avatar: devotee.avatar,
+    comment: cleanWish,
+    merit: 0
+  });
+  saveState();
+  broadcastNotification('temple.event', { event, state: getPublicState() });
+  return { event, state: getPublicState() };
 }
 
 // Idempotency cho Gift Combo: mỗi groupId theo dõi { maxCount, ended, endedAt, lastSeen }.
@@ -1037,16 +1054,31 @@ function parseViewerComment(commentText, user, uniqueId, avatar) {
 //              nhận được repeatEnd, ví dụ do mất kết nối giữa combo) tránh rò rỉ bộ nhớ.
 const giftComboTracker = new Map();
 const GIFT_COMBO_FINALIZE_GRACE_MS = 3000; // chịu được trùng lặp/đến muộn trong khoảng này sau khi combo kết thúc
-const GIFT_COMBO_STALE_MS = 2 * 60 * 1000; // dọn combo không có cập nhật mới quá 2 phút
+// Cho phép ghi đè qua biến môi trường CHỈ để automated test chạy nhanh (mặc định 2 phút khi
+// vận hành thật).
+const GIFT_COMBO_STALE_MS = Number(process.env.GIFT_COMBO_STALE_MS) || 2 * 60 * 1000;
+const GIFT_COMBO_CLEANUP_TICK_MS = Number(process.env.GIFT_COMBO_CLEANUP_TICK_MS) || 30000;
 
 const giftComboCleanupInterval = setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of giftComboTracker) {
     if (now - entry.lastSeen > GIFT_COMBO_STALE_MS) {
+      // Combo Rose không bao giờ nhận được tín hiệu kết thúc (repeatEnd) — ví dụ do mất kết
+      // nối TikTok giữa combo — vẫn phải xử lý với tổng số Rose đã ghi nhận được thay vì âm
+      // thầm xóa, tránh bỏ sót quà hợp lệ người xem đã thật sự gửi (yêu cầu minh bạch).
+      if (entry.isRose && !entry.thresholdDispatched && entry.ctx) {
+        entry.thresholdDispatched = true;
+        logLine(
+          'WARN',
+          'RoseFortune',
+          `Combo Rose của ${entry.ctx.user} không nhận được tín hiệu kết thúc sau ${Math.round(GIFT_COMBO_STALE_MS / 60000)} phút -> xử lý với tổng ${entry.maxCount} Rose đã ghi nhận được.`
+        );
+        dispatchRoseThreshold(entry.maxCount, entry.ctx);
+      }
       giftComboTracker.delete(key);
     }
   }
-}, 30000);
+}, GIFT_COMBO_CLEANUP_TICK_MS);
 
 function toPositiveInt(value, fallback) {
   const n = Math.floor(Number(value));
@@ -1100,7 +1132,7 @@ function interactionsAreEnabled() {
 }
 
 // ============================================================================
-// 5C. TỰ ĐỘNG XIN XĂM KHI NHẬN HOA HỒNG (ROSE) — HÀNG ĐỢI TUẦN TỰ
+// 5C. HOA HỒNG (ROSE) THEO MỐC 1 / 5 / 10 — DÂNG HOA / CẦU PHÚC / XIN XĂM
 // ============================================================================
 // Nhận diện quà "Rose": ưu tiên giftId 5655 — ID công khai, được xác nhận rộng rãi trong
 // cộng đồng tiktok-live-connector cho quà "Rose" (giá 1 xu, quà rẻ nhất trên TikTok) — kèm
@@ -1117,26 +1149,39 @@ function isRoseGift(giftObj, giftId) {
   return Number.isFinite(diamonds) && diamonds === 1;
 }
 
-// Hàng đợi xin xăm tự động (kích hoạt bởi Rose) — xử lý TUẦN TỰ, mỗi lần đúng 1 yêu cầu,
-// cách nhau ROSE_FORTUNE_DISPATCH_INTERVAL_MS để khớp với hoạt cảnh + giọng đọc ZeroTTS
-// hiện có (vốn chỉ có 1 "chỗ" hiển thị Chủ Lễ trung tâm — xem updateCentralWorshipper trong
-// live.js), tránh 20-50 người chồng lên nhau khi 1 combo Rose lớn đổ về cùng lúc.
+// Mốc số Rose -> nghi thức tương ứng. Cấu hình rõ ràng, không đoán: TỔNG số Rose cuối cùng
+// của 1 lượt/combo phải khớp CHÍNH XÁC 1 trong 3 mốc dưới đây. Số lượng khác (2,3,4,6..9,
+// 11+...) rơi vào nhánh fallback (xem dispatchRoseThreshold) — vẫn ghi nhận công đức như quà
+// thường, không tự suy đoán gán vào nghi thức nào.
+const ROSE_THRESHOLD_RITUALS = { 1: 'offerFlower', 5: 'blessingRose', 10: 'drawFortune' };
+
+// Hàng đợi nghi thức Rose — xử lý TUẦN TỰ, mỗi lần đúng 1 nghi thức, cách nhau
+// ROSE_FORTUNE_DISPATCH_INTERVAL_MS để khớp với hoạt cảnh + giọng đọc ZeroTTS hiện có (vốn
+// chỉ có 1 "chỗ" hiển thị Chủ Lễ trung tâm — xem updateCentralWorshipper trong live.js),
+// tránh nhiều người chồng lên nhau khi nhiều lượt Rose đổ về cùng lúc.
 // Hàng đợi này CHỈ tồn tại trong bộ nhớ (không ghi vào merit-state.json) — khi restart
 // server, hàng đợi rỗng lại từ đầu, KHÔNG phát lại các yêu cầu đã xử lý/đang chờ trước đó.
-// Nghi thức xin xăm bằng bình luận (parseViewerComment) KHÔNG đi qua hàng đợi này — giữ
-// nguyên hành vi tức thời hiện có, không khóa tính năng xin xăm miễn phí qua bình luận.
+// Nghi thức xin xăm bằng bình luận KHÔNG còn tồn tại (bình luận chỉ đưa người xem vào chùa,
+// xem parseViewerComment) nên không có xung đột hàng đợi giữa 2 nguồn.
 const ROSE_FORTUNE_QUEUE_MAX = 300;
-// Cho phép ghi đè qua biến môi trường CHỈ để automated test chạy nhanh (mặc định 8000ms
-// khi vận hành thật, khớp thời lượng hoạt cảnh + giọng đọc ZeroTTS hiện có).
-const ROSE_FORTUNE_DISPATCH_INTERVAL_MS = Number(process.env.ROSE_FORTUNE_INTERVAL_MS) || 8000;
+// Cho phép ghi đè qua biến môi trường CHỈ để automated test chạy nhanh (mặc định 6000ms khi
+// vận hành thật — đủ cho hoạt cảnh Dâng hoa/Cầu phúc ngắn lẫn Xin xăm dài hơn).
+const ROSE_FORTUNE_DISPATCH_INTERVAL_MS = Number(process.env.ROSE_FORTUNE_INTERVAL_MS) || 6000;
 const roseFortuneQueue = [];
 let roseFortuneTimer = null;
+function freshRitualTally() {
+  return { real: 0, mock: 0 };
+}
 const roseFortuneStats = {
-  realReceived: 0,
-  mockReceived: 0,
-  completedReal: 0,
-  completedMock: 0,
+  realRosesReceived: 0,
+  mockRosesReceived: 0,
   overflowDropped: 0,
+  completed: {
+    offerFlower: freshRitualTally(),
+    blessingRose: freshRitualTally(),
+    drawFortune: freshRitualTally(),
+    offerGiftFallback: freshRitualTally()
+  },
   recentLog: []
 };
 
@@ -1159,22 +1204,58 @@ function scheduleRoseFortuneTick(delayMs) {
   }, delayMs);
 }
 
+const RITUAL_LABELS = {
+  offerFlower: 'Dâng hoa',
+  blessingRose: 'Cầu phúc',
+  drawFortune: 'Xin xăm',
+  offerGiftFallback: 'Dâng quà (số Rose không khớp mốc 1/5/10)'
+};
+
+function dispatchQueuedRitual(item) {
+  const { ritual, ctx, count } = item;
+  const params = { user: ctx.user, uniqueId: ctx.uniqueId, avatar: ctx.avatar };
+  switch (ritual) {
+    case 'offerFlower':
+      Rituals.offerFlower(params);
+      break;
+    case 'blessingRose':
+      Rituals.blessingRose(params);
+      break;
+    case 'drawFortune':
+      Rituals.drawFortune({ ...params, topic: 'Lộc Hoa Hồng tâm thành' });
+      break;
+    case 'offerGiftFallback':
+      Rituals.offerGift({
+        ...params,
+        coins: count,
+        giftName: `${count}x Hoa Hồng`,
+        wish: `Thành tâm dâng ${count} Hoa Hồng kính lễ Đức Phật A Di Đà`
+      });
+      break;
+    default:
+      logLine('ERROR', 'RoseFortune', `Loại nghi thức không xác định trong hàng đợi: ${ritual}`);
+  }
+}
+
 function processRoseFortuneQueue() {
   const item = roseFortuneQueue.shift();
   if (!item) return;
   try {
-    Rituals.drawFortune({
-      user: item.user,
-      uniqueId: item.uniqueId,
-      avatar: item.avatar,
-      topic: 'Lộc Hoa Hồng tâm thành'
+    dispatchQueuedRitual(item);
+    const tally = roseFortuneStats.completed[item.ritual] || (roseFortuneStats.completed[item.ritual] = freshRitualTally());
+    if (item.source === 'MOCK') tally.mock += 1;
+    else tally.real += 1;
+    roseFortuneStats.recentLog.unshift({
+      timestamp: new Date().toISOString(),
+      user: item.ctx.user,
+      source: item.source,
+      ritual: item.ritual,
+      ritualLabel: RITUAL_LABELS[item.ritual] || item.ritual,
+      count: item.count
     });
-    if (item.source === 'MOCK') roseFortuneStats.completedMock += 1;
-    else roseFortuneStats.completedReal += 1;
-    roseFortuneStats.recentLog.unshift({ timestamp: new Date().toISOString(), user: item.user, source: item.source });
     if (roseFortuneStats.recentLog.length > 20) roseFortuneStats.recentLog.length = 20;
   } catch (e) {
-    logLine('ERROR', 'RoseFortune', `Lỗi khi tự động xin xăm cho ${item.user}: ${e.message}`);
+    logLine('ERROR', 'RoseFortune', `Lỗi khi thực hiện nghi thức '${item.ritual}' cho ${item.ctx.user}: ${e.message}`);
   }
   broadcastNotification('temple.state', getPublicState());
   if (roseFortuneQueue.length > 0) {
@@ -1182,35 +1263,52 @@ function processRoseFortuneQueue() {
   }
 }
 
-// deltaCount (số Rose MỚI vừa được xác nhận, đã khử trùng/combo qua giftComboTracker ở
-// handleGiftEvent) -> tạo đúng deltaCount yêu cầu xin xăm, không hơn không kém. Nếu hàng
-// đợi đã đầy, KHÔNG âm thầm bỏ qua: ghi log ERROR rõ ràng + đếm vào overflowDropped để
-// dashboard Admin hiển thị minh bạch, vì đây tương ứng với quà THẬT người xem đã trả tiền.
-function enqueueRoseFortune({ user, uniqueId, avatar, source }, count) {
-  for (let i = 0; i < count; i++) {
-    if (roseFortuneQueue.length >= ROSE_FORTUNE_QUEUE_MAX) {
-      roseFortuneStats.overflowDropped += 1;
-      logLine('ERROR', 'RoseFortune', `Hàng đợi xin xăm đã đầy (tối đa ${ROSE_FORTUNE_QUEUE_MAX}) — 1 yêu cầu của ${user} (${source}) bị từ chối thêm vào. Tổng đã quá tải: ${roseFortuneStats.overflowDropped}.`);
-      continue;
-    }
-    roseFortuneQueue.push({ user, uniqueId, avatar, source, enqueuedAt: Date.now() });
-    if (source === 'MOCK') roseFortuneStats.mockReceived += 1;
-    else roseFortuneStats.realReceived += 1;
+// Thêm đúng 1 nghi thức vào hàng đợi cho 1 lượt/combo Rose đã HOÀN TẤT. Nếu hàng đợi đã đầy,
+// KHÔNG âm thầm bỏ qua: ghi log ERROR rõ ràng + đếm vào overflowDropped để dashboard Admin
+// hiển thị minh bạch, vì đây tương ứng với quà THẬT người xem đã trả tiền.
+function enqueueRoseRitual(ritual, ctx, count) {
+  const source = eventSourceTag(ctx.uniqueId);
+  if (roseFortuneQueue.length >= ROSE_FORTUNE_QUEUE_MAX) {
+    roseFortuneStats.overflowDropped += 1;
+    logLine('ERROR', 'RoseFortune', `Hàng đợi nghi thức Rose đã đầy (tối đa ${ROSE_FORTUNE_QUEUE_MAX}) — nghi thức '${ritual}' của ${ctx.user} (${source}) bị từ chối thêm vào. Tổng đã quá tải: ${roseFortuneStats.overflowDropped}.`);
+    return;
   }
-  logLine('INFO', 'RoseFortune', `[${source}] Nhận ${count} Hoa Hồng từ ${user} -> đã thêm ${count} yêu cầu xin xăm vào hàng đợi (đang chờ: ${roseFortuneQueue.length}).`);
+  roseFortuneQueue.push({ ritual, ctx, count, source, enqueuedAt: Date.now() });
+  logLine('INFO', 'RoseFortune', `[${source}] ${ctx.user} hoàn tất ${count} Hoa Hồng -> xếp hàng nghi thức '${RITUAL_LABELS[ritual] || ritual}' (đang chờ: ${roseFortuneQueue.length}).`);
   broadcastNotification('temple.state', getPublicState());
   scheduleRoseFortuneTick(0);
+}
+
+// Quyết định nghi thức dựa trên TỔNG SỐ Rose cuối cùng của 1 lượt/combo đã HOÀN TẤT (không
+// đoán giữa chừng khi combo đang tăng dần — xem lời gọi trong handleGiftEvent/cleanup bên
+// dưới, chỉ gọi hàm này khi combo đã kết thúc hoặc hết hạn chờ).
+function dispatchRoseThreshold(count, ctx) {
+  if (!roseFortuneAutoEnabled()) return;
+  const ritual = ROSE_THRESHOLD_RITUALS[count];
+  const source = eventSourceTag(ctx.uniqueId);
+  if (source === 'MOCK') roseFortuneStats.mockRosesReceived += count;
+  else roseFortuneStats.realRosesReceived += count;
+
+  if (!ritual) {
+    logLine(
+      'WARN',
+      'RoseFortune',
+      `[${source}] ${ctx.user} tặng tổng ${count} Hoa Hồng (không khớp mốc 1/5/10) -> ghi nhận công đức như quà thường, không kích hoạt riêng Dâng hoa/Cầu phúc/Xin xăm.`
+    );
+    enqueueRoseRitual('offerGiftFallback', ctx, count);
+    return;
+  }
+  enqueueRoseRitual(ritual, ctx, count);
 }
 
 function getRoseFortunePublicStats() {
   return {
     enabled: roseFortuneAutoEnabled(),
     pending: roseFortuneQueue.length,
-    realReceived: roseFortuneStats.realReceived,
-    mockReceived: roseFortuneStats.mockReceived,
-    completedReal: roseFortuneStats.completedReal,
-    completedMock: roseFortuneStats.completedMock,
+    realRosesReceived: roseFortuneStats.realRosesReceived,
+    mockRosesReceived: roseFortuneStats.mockRosesReceived,
     overflowDropped: roseFortuneStats.overflowDropped,
+    completed: roseFortuneStats.completed,
     recentLog: roseFortuneStats.recentLog.slice(0, 10)
   };
 }
@@ -1259,14 +1357,18 @@ function handleGiftEvent(data) {
   const repeatCount = toPositiveInt(data?.repeatCount ?? data?.comboCount, 1);
   const repeatEnd = Boolean(data?.repeatEnd);
   const now = Date.now();
+  const isRose = isRoseGift(giftObj, giftId);
+  const ctx = { user, uniqueId, avatar };
 
   const prevEntry = giftComboTracker.get(groupId);
   let deltaCount = 0;
+  let entry;
 
   if (!prevEntry) {
     // Combo hoàn toàn mới (hoặc 1 quà đơn không nằm trong combo) -> ghi nhận từ đầu.
     deltaCount = repeatCount;
-    giftComboTracker.set(groupId, { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now });
+    entry = { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now, isRose, thresholdDispatched: false, ctx };
+    giftComboTracker.set(groupId, entry);
   } else if (!prevEntry.ended) {
     // Combo đang diễn ra (chưa kết thúc).
     if (repeatCount > prevEntry.maxCount) {
@@ -1279,6 +1381,8 @@ function handleGiftEvent(data) {
       prevEntry.endedAt = now;
     }
     prevEntry.lastSeen = now;
+    prevEntry.ctx = ctx; // tên/avatar có thể cập nhật mới hơn trong lúc combo diễn ra
+    entry = prevEntry;
   } else if (now - prevEntry.endedAt <= GIFT_COMBO_FINALIZE_GRACE_MS) {
     // Combo vừa kết thúc gần đây -> đây là sự kiện trùng lặp/đến muộn của CHÍNH combo đó.
     if (repeatCount > prevEntry.maxCount) {
@@ -1290,11 +1394,13 @@ function handleGiftEvent(data) {
     prevEntry.ended = true;
     prevEntry.endedAt = now;
     prevEntry.lastSeen = now;
+    entry = prevEntry;
   } else {
     // Đã quá thời gian ân hạn kể từ lúc combo trước kết thúc -> xem như một combo MỚI của
     // cùng người xem (xảy ra khi TikTok không cung cấp groupId riêng cho mỗi combo).
     deltaCount = repeatCount;
-    giftComboTracker.set(groupId, { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now });
+    entry = { maxCount: repeatCount, ended: repeatEnd, endedAt: repeatEnd ? now : null, lastSeen: now, isRose, thresholdDispatched: false, ctx };
+    giftComboTracker.set(groupId, entry);
   }
 
   if (giftComboTracker.size > 500) {
@@ -1302,6 +1408,25 @@ function handleGiftEvent(data) {
     giftComboTracker.delete(firstKey);
   }
 
+  // ---- HOA HỒNG (ROSE): đi theo luồng mốc 1/5/10 riêng, KHÔNG qua Rituals.offerGift ----
+  // Chỉ quyết định nghi thức khi combo đã HOÀN TẤT (repeatEnd) — không kích hoạt "nghi thức
+  // 1 Rose" giữa chừng khi combo đang tăng dần hướng tới mốc 5 hoặc 10 (yêu cầu rõ ràng).
+  // thresholdDispatched đảm bảo 1 combo chỉ bao giờ kích hoạt ĐÚNG MỘT nghi thức, kể cả khi
+  // sự kiện kết thúc (repeatEnd) bị TikTok gửi trùng lặp trong khoảng ân hạn ở trên.
+  if (isRose) {
+    logLine(
+      'INFO',
+      'TikTok',
+      `[GIFT][${eventSourceTag(uniqueId)}] ${user} gửi Rose (giftId=${giftId}) — tổng lượt/combo hiện tại: ${entry.maxCount}${entry.ended ? ', ĐÃ KẾT THÚC' : ', đang tiếp tục...'}`
+    );
+    if (entry.ended && !entry.thresholdDispatched) {
+      entry.thresholdDispatched = true;
+      dispatchRoseThreshold(entry.maxCount, entry.ctx);
+    }
+    return;
+  }
+
+  // ---- QUÀ KHÁC ROSE: giữ nguyên hành vi cũ (ghi công đức theo diamondCount x đơn vị mới) ----
   if (deltaCount <= 0) return; // Không có đơn vị quà mới nào cần ghi công đức.
 
   const diamondCount = Math.max(1, Number(giftObj?.diamondCount || data?.diamondCount || 1));
@@ -1319,13 +1444,6 @@ function handleGiftEvent(data) {
     giftName: displayGiftName,
     wish: `Thành tâm dâng ${displayGiftName} kính lễ Đức Phật A Di Đà`
   });
-
-  // Tự động xin xăm khi nhận Hoa Hồng (Rose) — không thay đổi/thay thế Rituals.offerGift ở
-  // trên (vẫn tính công đức/dâng cúng như cũ), chỉ BỔ SUNG thêm deltaCount yêu cầu xin xăm
-  // (đúng số Rose MỚI xác nhận trong lượt này, đã khử trùng qua giftComboTracker phía trên).
-  if (roseFortuneAutoEnabled() && isRoseGift(giftObj, giftId)) {
-    enqueueRoseFortune({ user, uniqueId, avatar, source: eventSourceTag(uniqueId) }, deltaCount);
-  }
 }
 
 async function connectTikTokLive(usernameOrUrl, { isAutoRetry = false } = {}) {
@@ -1641,6 +1759,10 @@ async function handleRpcCall(method, params = {}) {
       return Rituals.sendPrayer(params);
     case 'temple.offerGift':
       return Rituals.offerGift(params);
+    case 'temple.offerFlower':
+      return Rituals.offerFlower(params);
+    case 'temple.blessingRose':
+      return Rituals.blessingRose(params);
     case 'temple.drawFortune':
       return Rituals.drawFortune(params);
     case 'temple.grandCeremony':
