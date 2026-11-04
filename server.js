@@ -426,7 +426,18 @@ function loadState() {
         ...saved,
         devotees: saved.devotees || {},
         offerings: { ...DEFAULT_STATE.offerings, ...(saved.offerings || {}) },
-        settings: { ...DEFAULT_STATE.settings, ...(saved.settings || {}) },
+        settings: {
+          ...DEFAULT_STATE.settings,
+          ...(saved.settings || {}),
+          // autoSim/mockLiveEnabled là công tắc TẠM THỜI cho phiên kiểm thử hiện tại, không
+          // phải tuỳ chọn lâu dài — nếu khôi phục nguyên giá trị đã lưu (ví dụ còn "true" từ
+          // lần test trước khi tắt server), getLeaderboard() sẽ lại cho hiện các thí chủ MOCK/
+          // AutoSim cũ ngay khi LIVE khởi động, đúng lỗi mà vận hành thật cần tránh. Luôn reset
+          // về false mỗi lần khởi động (giống cách tiktok.connected reset ở dưới) — Admin phải
+          // chủ động bật lại nếu muốn kiểm thử trong phiên mới.
+          autoSim: false,
+          mockLiveEnabled: false
+        },
         tiktok: { ...DEFAULT_STATE.tiktok }
       };
     }
@@ -460,8 +471,23 @@ function saveState() {
   }, 1200);
 }
 
+// Thí chủ tạo bởi Mock Live ("mock_*", xem MOCK_VIEWER_POOL) hoặc bởi AutoSim
+// (SIM_DEVOTEES) KHÔNG được hiển thị trong bảng TẤM LÒNG THÀNH / đạo tràng / đệm VIP
+// của LIVE thật — dù dữ liệu đó đã được lưu lại từ lần kiểm thử trước và server vừa
+// khởi động lại (saveState() lưu toàn bộ state.devotees, không phân biệt nguồn), vì
+// hai cờ bật/tắt dưới đây luôn reset về false khi khởi động (xem DEFAULT_STATE) nên
+// ghế/bảng xếp hạng vẫn TRỐNG cho tới khi có người xem thật tương tác. Bật lại
+// mockLiveEnabled/autoSim để xem đúng dữ liệu giả đang kiểm thử (có nhãn MOCK_ rõ
+// ràng với Mock Live); KHÔNG xoá dữ liệu — chỉ ẩn khỏi màn hình LIVE thật.
+function isMockOrSimDevotee(uniqueId) {
+  const uid = String(uniqueId || '');
+  return uid.startsWith('mock_') || SIM_DEVOTEE_UNIQUE_IDS.has(uid);
+}
+
 function getLeaderboard(limit = 6) {
+  const showMock = Boolean(state.settings.mockLiveEnabled) || Boolean(state.settings.autoSim);
   return Object.values(state.devotees)
+    .filter((d) => showMock || !isMockOrSimDevotee(d.uniqueId))
     .sort((a, b) => b.merit - a.merit)
     .slice(0, limit)
     .map((d, index) => ({
@@ -1713,6 +1739,9 @@ const SIM_DEVOTEES = [
   { user: 'Phạm Thanh Hà', uniqueId: 'thanhha.lotus', wish: 'Cầu gia đạo êm ấm, con cái ngoan ngoãn học giỏi' },
   { user: 'Vũ Đức Thịnh', uniqueId: 'ducthinh88', wish: 'Con xin gieo một quẻ cầu tài lộc đầu năm' }
 ];
+// Dùng bởi getLeaderboard() (định nghĩa phía trên) để ẩn các thí chủ do AutoSim tạo
+// ra khỏi màn hình LIVE thật — xem isMockOrSimDevotee().
+const SIM_DEVOTEE_UNIQUE_IDS = new Set(SIM_DEVOTEES.map((d) => d.uniqueId));
 
 function runSingleSimulationStep() {
   const pick = SIM_DEVOTEES[Math.floor(Math.random() * SIM_DEVOTEES.length)];

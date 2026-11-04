@@ -255,6 +255,7 @@ test('Phase 6 - Lưu và khôi phục dữ liệu (persistence)', async (t) => {
   await server1.rpc('temple.burnIncense', { user: 'Persist User', count: 3, wish: 'test' });
   await server1.rpc('temple.ringBell', { user: 'Persist User', count: 1 });
   await server1.rpc('live.setAutoSim', { enabled: true });
+  await server1.rpc('live.setMockMode', { enabled: true });
 
   // saveState() có debounce 1200ms trước khi ghi file -> chờ đủ lâu rồi mới đọc trực tiếp.
   await new Promise((r) => setTimeout(r, 1600));
@@ -262,6 +263,7 @@ test('Phase 6 - Lưu và khôi phục dữ liệu (persistence)', async (t) => {
   const onDisk = server1.readStateFile();
   assert.ok(onDisk, 'file merit-state.json phải được tạo ra');
   assert.equal(onDisk.settings.autoSim, true);
+  assert.equal(onDisk.settings.mockLiveEnabled, true);
   assert.ok(onDisk.totalMerit >= 25); // 3*5 + 10
 
   const dataDir = server1.dataDir;
@@ -307,8 +309,14 @@ test('Phase 6 - Lưu và khôi phục dữ liệu (persistence)', async (t) => {
 
   const stateRes = await fetch('http://127.0.0.1:3308/api/state');
   const restoredState = await stateRes.json();
-  assert.equal(restoredState.totalMerit, expectedMerit, 'phải khôi phục đúng công đức đã lưu từ lần chạy trước');
-  assert.equal(restoredState.settings.autoSim, true, 'phải khôi phục đúng cài đặt AutoSim đã lưu');
+  assert.equal(restoredState.totalMerit, expectedMerit, 'phải khôi phục đúng công đức đã lưu từ lần chạy trước (dữ liệu thật)');
+  // autoSim/mockLiveEnabled là công tắc TẠM THỜI cho 1 phiên kiểm thử, KHÔNG phải tuỳ chọn lâu
+  // dài: dù file đã lưu ghi "true" từ lần chạy trước (dòng onDisk.settings.autoSim ở trên),
+  // loadState() phải luôn reset 2 cờ này về false khi khởi động lại — nếu không, thí chủ giả
+  // (MOCK_*/AutoSim) từ lần kiểm thử trước sẽ tự xuất hiện lại trên màn hình LIVE thật ngay khi
+  // server vừa khởi động, trước khi Admin kịp làm gì (xem getLeaderboard()/isMockOrSimDevotee()).
+  assert.equal(restoredState.settings.autoSim, false, 'AutoSim phải reset về false khi khởi động lại, dù đã lưu là true');
+  assert.equal(restoredState.settings.mockLiveEnabled, false, 'Mock Live phải reset về false khi khởi động lại, dù đã lưu là true');
 
   child.kill();
 });
