@@ -214,6 +214,23 @@
         </div>
         <button class="btn gold" id="btnToggleMockLive">▶️ Bật Mock Live Tự Động (1 sự kiện/~4s)</button>
       </section>
+
+      <section class="card">
+        <h2>🌹 7. Tự Động Xin Xăm Khi Nhận Hoa Hồng (Rose)</h2>
+        <p style="font-size: 13px; color: var(--muted);">
+          Mỗi Hoa Hồng (Rose, quà 1 xu) hợp lệ nhận được sẽ tự tạo 1 yêu cầu xin xăm, xếp hàng xử lý tuần tự (không chồng lên nhau khi combo lớn). Không ảnh hưởng đến công đức/dâng cúng vốn vẫn tính như cũ.
+        </p>
+        <div id="roseFortuneSummary" style="font-size: 13px; color: var(--muted); line-height: 1.8;">Đang tải...</div>
+        <div class="row">
+          <button class="btn" id="btnToggleRoseFortune">⏸️ Tạm Dừng Tự Động Xin Xăm (Rose)</button>
+        </div>
+        <div class="action-grid">
+          <button class="btn gold" onclick="sendMockRose(1)">🌹 Mock: Tặng 1 Rose</button>
+          <button class="btn" id="btnMockRoseCombo">🌹🌹🌹 Mock: Combo Rose 1→2→3</button>
+        </div>
+        <div class="dock-section-title" style="font-size:13px;color:var(--muted);margin-top:4px;">📋 Nhật ký xin xăm gần nhất</div>
+        <pre id="roseFortuneLogOutput" style="max-height:140px;">(chưa có yêu cầu nào)</pre>
+      </section>
     </div>
   </div>
 
@@ -259,6 +276,7 @@
 
     let interactionsEnabled = true;
     let mockLiveEnabled = false;
+    let roseFortuneEnabled = true;
 
     async function refreshStatus() {
       const res = await fetch('/api/state');
@@ -289,6 +307,22 @@
       document.getElementById('errorLogOutput').textContent = errLog.length
         ? errLog.map((e) => `[${e.timestamp}] [${e.level}] [${e.scope}] ${e.message}`).join('\n')
         : '(chưa có lỗi nào)';
+
+      const rf = st.roseFortune || {};
+      roseFortuneEnabled = rf.enabled !== false;
+      document.getElementById('btnToggleRoseFortune').textContent =
+        roseFortuneEnabled ? '⏸️ Tạm Dừng Tự Động Xin Xăm (Rose)' : '▶️ Bật Lại Tự Động Xin Xăm (Rose)';
+      document.getElementById('roseFortuneSummary').innerHTML = [
+        `⚙️ Tính năng: <strong>${roseFortuneEnabled ? 'ĐANG BẬT' : 'ĐÃ TẠM DỪNG'}</strong>`,
+        `🌹 Rose thật đã nhận: <strong>${rf.realReceived ?? 0}</strong> | Rose Mock: <strong>${rf.mockReceived ?? 0}</strong>`,
+        `⏳ Đang chờ xin xăm: <strong>${rf.pending ?? 0}</strong>`,
+        `✅ Đã hoàn thành — Thật: <strong>${rf.completedReal ?? 0}</strong> | Mock: <strong>${rf.completedMock ?? 0}</strong>`,
+        `⚠️ Quá tải hàng đợi (bị từ chối thêm): <strong>${rf.overflowDropped ?? 0}</strong>`
+      ].join('<br>');
+      const rfLog = rf.recentLog || [];
+      document.getElementById('roseFortuneLogOutput').textContent = rfLog.length
+        ? rfLog.map((e) => `[${e.timestamp}] [${e.source}] ${e.user} đã được xin xăm`).join('\n')
+        : '(chưa có yêu cầu nào)';
     }
     refreshStatus();
     setInterval(refreshStatus, 4000);
@@ -309,6 +343,22 @@
       await sendRpc('live.mockEvent', { type: 'gift', uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 5, repeatEnd: true });
     };
     window.sendMock = (type) => sendRpc('live.mockEvent', { type });
+
+    document.getElementById('btnToggleRoseFortune').onclick = async () => {
+      await sendRpc('temple.updateSettings', { autoFortuneOnRoseEnabled: !roseFortuneEnabled });
+    };
+    window.sendMockRose = (repeatCount) => sendRpc('live.mockEvent', {
+      type: 'gift',
+      diamondCount: 1,
+      repeatCount,
+      repeatEnd: true
+    });
+    document.getElementById('btnMockRoseCombo').onclick = async () => {
+      const groupId = `admin_rose_combo_${Date.now()}`;
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 1 });
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 2 });
+      await sendRpc('live.mockEvent', { type: 'gift', diamondCount: 1, uniqueId: 'mock_an_nhien_88', groupId, repeatCount: 3, repeatEnd: true });
+    };
   </script>
 </body>
 </html>

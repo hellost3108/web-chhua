@@ -404,7 +404,8 @@ const DEFAULT_STATE = {
     autoSim: false,
     autoSimIntervalMs: 9500,
     mockLiveEnabled: false,
-    interactionsEnabled: true
+    interactionsEnabled: true,
+    autoFortuneOnRoseEnabled: true
   },
   tiktok: {
     connected: false,
@@ -608,6 +609,7 @@ function getPublicState() {
     settings: state.settings,
     tiktok: state.tiktok,
     tts: zeroTts ? zeroTts.getStatus() : { ready: false, status: 'init', voice: 'maichi' },
+    roseFortune: getRoseFortunePublicStats(),
     health: {
       uptimeSec: Math.floor((Date.now() - BOOT_TIME) / 1000),
       wsClients: wss ? wss.clients.size : 0,
@@ -865,6 +867,74 @@ const Rituals = {
 // 5. TIKTOK LIVE CONNECTOR & COMMENT PARSER
 // ============================================================================
 let tiktokConn = null;
+// "Thế hệ" kết nối hiện tại — tăng lên mỗi lần connectTikTokLive()/disconnectTikTokLive()
+// được gọi. Các listener (CONNECTED/DISCONNECTED/ERROR) gắn vào MỘT tiktokConn cụ thể
+// đóng (closure) giá trị thế hệ lúc tạo ra nó; nếu thế hệ đó đã bị thay thế (người dùng
+// bấm Connect sang tài khoản khác, hoặc Disconnect) trước khi sự kiện cũ (ví dụ
+// 'disconnected' từ lần disconnect() dọn dẹp connection cũ) kịp bắn ra, listener sẽ tự
+// bỏ qua — tránh ghi đè state.tiktok bằng dữ liệu của kết nối đã lỗi thời, và tránh lên
+// lịch tự động kết nối lại (xem scheduleTikTokReconnect) cho một kết nối không còn ai cần.
+let tiktokConnGeneration = 0;
+let tiktokIntentionalDisconnect = false;
+let tiktokReconnectTimer = null;
+let tiktokReconnectAttempts = 0;
+const TIKTOK_MAX_AUTO_RECONNECTS = 5;
+// Cho phép ghi đè qua biến môi trường CHỈ để automated test chạy nhanh (mặc định 15s khi
+// vận hành thật, tăng gấp đôi mỗi lần, tối đa 5 phút).
+const TIKTOK_RECONNECT_BASE_MS = Number(process.env.TIKTOK_RECONNECT_BASE_MS) || 15000;
+const TIKTOK_RECONNECT_MAX_MS = Number(process.env.TIKTOK_RECONNECT_MAX_MS) || 5 * 60 * 1000;
+
+function clearTikTokReconnectTimer() {
+  if (tiktokReconnectTimer) {
+    clearTimeout(tiktokReconnectTimer);
+    tiktokReconnectTimer = null;
+  }
+}
+
+/**
+ * Tự động kết nối lại khi mất kết nối ngoài ý muốn (rớt mạng, TikTok rate-limit dịch vụ
+ * ký request, streamer tạm ngắt...) — dùng backoff tăng dần (15s -> 30s -> ... tối đa 5
+ * phút) và dừng hẳn sau TIKTOK_MAX_AUTO_RECONNECTS lần để không tự ý "dội bom" dịch vụ ký
+ * của TikTok (chính nguyên nhân gây lỗi "rate_limit_account_minute" đã gặp trong vận hành
+ * thật). Sau khi hết lượt, cần bấm nút "Kết nối" trên dashboard Admin để thử lại thủ công.
+ */
+function scheduleTikTokReconnect(username) {
+  if (tiktokIntentionalDisconnect || tiktokReconnectTimer || !username) return;
+  if (tiktokReconnectAttempts >= TIKTOK_MAX_AUTO_RECONNECTS) {
+    logLine('ERROR', 'TikTok', `Đã tự động kết nối lại ${TIKTOK_MAX_AUTO_RECONNECTS} lần không thành công cho @${username}. DỪNG tự động retry (tránh bị giới hạn tốc độ từ dịch vụ ký của TikTok). Dùng nút "Kết nối" trên dashboard Admin để thử lại thủ công.`);
+    return;
+  }
+  tiktokReconnectAttempts += 1;
+  const delayMs = Math.min(TIKTOK_RECONNECT_MAX_MS, TIKTOK_RECONNECT_BASE_MS * Math.pow(2, tiktokReconnectAttempts - 1));
+  logLine('WARN', 'TikTok', `Mất kết nối phòng Live @${username}. Tự động kết nối lại lần ${tiktokReconnectAttempts}/${TIKTOK_MAX_AUTO_RECONNECTS} sau ${Math.round(delayMs / 1000)}s...`);
+  tiktokReconnectTimer = setTimeout(() => {
+    tiktokReconnectTimer = null;
+    connectTikTokLive(username, { isAutoRetry: true }).catch(() => {
+      // Lỗi đã được ghi log & lưu vào state.tiktok.lastError trong connectTikTokLive();
+      // ở đây chỉ cần lên lịch thử lại tiếp (connectTikTokLive gọi scheduleTikTokReconnect
+      // khi connect() thất bại, nên KHÔNG tự gọi lại ở đây để tránh lên lịch đôi).
+    });
+  }, delayMs);
+}
+
+// Gắn nhãn nguồn sự kiện (TikTok thật vs Mock Live) cho logging — Mock Live luôn dùng
+// uniqueId tiền tố "mock_" (xem MOCK_VIEWER_POOL), nên không bao giờ trùng với uniqueId
+// thật của TikTok, dùng được an toàn làm dấu hiệu phân biệt.
+function eventSourceTag(uniqueId) {
+  return String(uniqueId || '').startsWith('mock_') ? 'MOCK' : 'REAL';
+}
+
+// Cảnh báo (gộp, tối đa 1 lần/60s) khi sự kiện người xem bị bỏ qua vì tương tác đang bị
+// tạm dừng (system.setInteractionsEnabled false) — tránh spam log nhưng vẫn đảm bảo nguyên
+// nhân "chùa không phản hồi" do quên bật lại tương tác sau khi test sẽ hiện rõ trong log
+// & dashboard Admin (mục Nhật ký lỗi) thay vì bị âm thầm bỏ qua không dấu vết.
+let lastInteractionsPausedLogTs = 0;
+function noteInteractionDroppedWhilePaused(kind) {
+  const now = Date.now();
+  if (now - lastInteractionsPausedLogTs < 60000) return;
+  lastInteractionsPausedLogTs = now;
+  logLine('WARN', 'TikTok', `Sự kiện '${kind}' từ người xem bị BỎ QUA vì tương tác đang TẠM DỪNG (interactionsEnabled=false). Vào dashboard Admin > mục Vận Hành & Giám Sát để bật lại nếu đây không phải chủ ý.`);
+}
 
 const commentCooldownMap = new Map();
 
@@ -1029,30 +1099,146 @@ function interactionsAreEnabled() {
   return state.settings.interactionsEnabled !== false;
 }
 
+// ============================================================================
+// 5C. TỰ ĐỘNG XIN XĂM KHI NHẬN HOA HỒNG (ROSE) — HÀNG ĐỢI TUẦN TỰ
+// ============================================================================
+// Nhận diện quà "Rose": ưu tiên giftId 5655 — ID công khai, được xác nhận rộng rãi trong
+// cộng đồng tiktok-live-connector cho quà "Rose" (giá 1 xu, quà rẻ nhất trên TikTok) — kèm
+// fallback theo diamondCount === 1 (Rose là quà DUY NHẤT có giá 1 xu trên TikTok ở thời điểm
+// viết code này). KHÔNG dựa vào tên hiển thị (có thể đổi theo ngôn ngữ phòng Live). Mọi sự
+// kiện GIFT thật đều được ghi log đầy đủ giftId/tên qua handleGiftEvent (xem logLine
+// '[GIFT][REAL]...') — nếu TikTok phát sinh thêm quà 1-xu khác trong tương lai, hãy đối
+// chiếu log thật đó rồi cập nhật ROSE_GIFT_ID cho chính xác.
+const ROSE_GIFT_ID = '5655';
+function isRoseGift(giftObj, giftId) {
+  const idStr = String(giftId || giftObj?.id || '').trim();
+  if (idStr && idStr === ROSE_GIFT_ID) return true;
+  const diamonds = Number(giftObj?.diamondCount);
+  return Number.isFinite(diamonds) && diamonds === 1;
+}
+
+// Hàng đợi xin xăm tự động (kích hoạt bởi Rose) — xử lý TUẦN TỰ, mỗi lần đúng 1 yêu cầu,
+// cách nhau ROSE_FORTUNE_DISPATCH_INTERVAL_MS để khớp với hoạt cảnh + giọng đọc ZeroTTS
+// hiện có (vốn chỉ có 1 "chỗ" hiển thị Chủ Lễ trung tâm — xem updateCentralWorshipper trong
+// live.js), tránh 20-50 người chồng lên nhau khi 1 combo Rose lớn đổ về cùng lúc.
+// Hàng đợi này CHỈ tồn tại trong bộ nhớ (không ghi vào merit-state.json) — khi restart
+// server, hàng đợi rỗng lại từ đầu, KHÔNG phát lại các yêu cầu đã xử lý/đang chờ trước đó.
+// Nghi thức xin xăm bằng bình luận (parseViewerComment) KHÔNG đi qua hàng đợi này — giữ
+// nguyên hành vi tức thời hiện có, không khóa tính năng xin xăm miễn phí qua bình luận.
+const ROSE_FORTUNE_QUEUE_MAX = 300;
+// Cho phép ghi đè qua biến môi trường CHỈ để automated test chạy nhanh (mặc định 8000ms
+// khi vận hành thật, khớp thời lượng hoạt cảnh + giọng đọc ZeroTTS hiện có).
+const ROSE_FORTUNE_DISPATCH_INTERVAL_MS = Number(process.env.ROSE_FORTUNE_INTERVAL_MS) || 8000;
+const roseFortuneQueue = [];
+let roseFortuneTimer = null;
+const roseFortuneStats = {
+  realReceived: 0,
+  mockReceived: 0,
+  completedReal: 0,
+  completedMock: 0,
+  overflowDropped: 0,
+  recentLog: []
+};
+
+function roseFortuneAutoEnabled() {
+  return state.settings.autoFortuneOnRoseEnabled !== false;
+}
+
+function clearRoseFortuneTimer() {
+  if (roseFortuneTimer) {
+    clearTimeout(roseFortuneTimer);
+    roseFortuneTimer = null;
+  }
+}
+
+function scheduleRoseFortuneTick(delayMs) {
+  if (roseFortuneTimer) return;
+  roseFortuneTimer = setTimeout(() => {
+    roseFortuneTimer = null;
+    processRoseFortuneQueue();
+  }, delayMs);
+}
+
+function processRoseFortuneQueue() {
+  const item = roseFortuneQueue.shift();
+  if (!item) return;
+  try {
+    Rituals.drawFortune({
+      user: item.user,
+      uniqueId: item.uniqueId,
+      avatar: item.avatar,
+      topic: 'Lộc Hoa Hồng tâm thành'
+    });
+    if (item.source === 'MOCK') roseFortuneStats.completedMock += 1;
+    else roseFortuneStats.completedReal += 1;
+    roseFortuneStats.recentLog.unshift({ timestamp: new Date().toISOString(), user: item.user, source: item.source });
+    if (roseFortuneStats.recentLog.length > 20) roseFortuneStats.recentLog.length = 20;
+  } catch (e) {
+    logLine('ERROR', 'RoseFortune', `Lỗi khi tự động xin xăm cho ${item.user}: ${e.message}`);
+  }
+  broadcastNotification('temple.state', getPublicState());
+  if (roseFortuneQueue.length > 0) {
+    scheduleRoseFortuneTick(ROSE_FORTUNE_DISPATCH_INTERVAL_MS);
+  }
+}
+
+// deltaCount (số Rose MỚI vừa được xác nhận, đã khử trùng/combo qua giftComboTracker ở
+// handleGiftEvent) -> tạo đúng deltaCount yêu cầu xin xăm, không hơn không kém. Nếu hàng
+// đợi đã đầy, KHÔNG âm thầm bỏ qua: ghi log ERROR rõ ràng + đếm vào overflowDropped để
+// dashboard Admin hiển thị minh bạch, vì đây tương ứng với quà THẬT người xem đã trả tiền.
+function enqueueRoseFortune({ user, uniqueId, avatar, source }, count) {
+  for (let i = 0; i < count; i++) {
+    if (roseFortuneQueue.length >= ROSE_FORTUNE_QUEUE_MAX) {
+      roseFortuneStats.overflowDropped += 1;
+      logLine('ERROR', 'RoseFortune', `Hàng đợi xin xăm đã đầy (tối đa ${ROSE_FORTUNE_QUEUE_MAX}) — 1 yêu cầu của ${user} (${source}) bị từ chối thêm vào. Tổng đã quá tải: ${roseFortuneStats.overflowDropped}.`);
+      continue;
+    }
+    roseFortuneQueue.push({ user, uniqueId, avatar, source, enqueuedAt: Date.now() });
+    if (source === 'MOCK') roseFortuneStats.mockReceived += 1;
+    else roseFortuneStats.realReceived += 1;
+  }
+  logLine('INFO', 'RoseFortune', `[${source}] Nhận ${count} Hoa Hồng từ ${user} -> đã thêm ${count} yêu cầu xin xăm vào hàng đợi (đang chờ: ${roseFortuneQueue.length}).`);
+  broadcastNotification('temple.state', getPublicState());
+  scheduleRoseFortuneTick(0);
+}
+
+function getRoseFortunePublicStats() {
+  return {
+    enabled: roseFortuneAutoEnabled(),
+    pending: roseFortuneQueue.length,
+    realReceived: roseFortuneStats.realReceived,
+    mockReceived: roseFortuneStats.mockReceived,
+    completedReal: roseFortuneStats.completedReal,
+    completedMock: roseFortuneStats.completedMock,
+    overflowDropped: roseFortuneStats.overflowDropped,
+    recentLog: roseFortuneStats.recentLog.slice(0, 10)
+  };
+}
+
 function handleMemberEvent(data) {
-  if (!interactionsAreEnabled()) return;
+  if (!interactionsAreEnabled()) return noteInteractionDroppedWhilePaused('member');
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   recordDevotee(user, uniqueId, avatar, 1, 0, 0, 'Đã vào Chánh Điện lễ Phật');
   broadcastNotification('temple.state', getPublicState());
 }
 
 function handleChatEvent(data) {
-  if (!interactionsAreEnabled()) return;
+  if (!interactionsAreEnabled()) return noteInteractionDroppedWhilePaused('chat');
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const commentText = data?.content || data?.comment || '';
-  console.log(`[TikTok Chat] ${user}: ${commentText}`);
+  logLine('INFO', 'TikTok', `[CHAT][${eventSourceTag(uniqueId)}] ${user}: ${commentText}`);
   parseViewerComment(commentText, user, uniqueId, avatar);
 }
 
 function handleLikeEvent(data) {
-  if (!interactionsAreEnabled()) return;
+  if (!interactionsAreEnabled()) return noteInteractionDroppedWhilePaused('like');
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const likeCount = Math.min(15, Math.max(1, Number(data?.count ?? data?.likeCount ?? 1)));
   Rituals.strikeWoodenFish({ user, uniqueId, avatar, count: likeCount });
 }
 
 function handleSocialEvent(data) {
-  if (!interactionsAreEnabled()) return;
+  if (!interactionsAreEnabled()) return noteInteractionDroppedWhilePaused('social');
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   Rituals.ringBell({
     user,
@@ -1065,7 +1251,7 @@ function handleSocialEvent(data) {
 }
 
 function handleGiftEvent(data) {
-  if (!interactionsAreEnabled()) return;
+  if (!interactionsAreEnabled()) return noteInteractionDroppedWhilePaused('gift');
   const { user, uniqueId, avatar } = extractUserFromEvent(data);
   const giftObj = data?.gift || data?.giftDetails || {};
   const giftId = String(data?.giftId || giftObj?.id || 'rose');
@@ -1123,7 +1309,7 @@ function handleGiftEvent(data) {
   const rawGiftName = giftObj?.name || data?.giftName || giftObj?.describe || 'Hoa Hồng Tâm Thành';
   const displayGiftName = deltaCount > 1 ? `${deltaCount}x ${rawGiftName}` : rawGiftName;
 
-  console.log(`[TikTok Gift] ${user} gửi ${displayGiftName} (${totalCoins} xu)`);
+  logLine('INFO', 'TikTok', `[GIFT][${eventSourceTag(uniqueId)}] ${user} gửi ${displayGiftName} (${totalCoins} xu)`);
 
   Rituals.offerGift({
     user,
@@ -1133,20 +1319,48 @@ function handleGiftEvent(data) {
     giftName: displayGiftName,
     wish: `Thành tâm dâng ${displayGiftName} kính lễ Đức Phật A Di Đà`
   });
+
+  // Tự động xin xăm khi nhận Hoa Hồng (Rose) — không thay đổi/thay thế Rituals.offerGift ở
+  // trên (vẫn tính công đức/dâng cúng như cũ), chỉ BỔ SUNG thêm deltaCount yêu cầu xin xăm
+  // (đúng số Rose MỚI xác nhận trong lượt này, đã khử trùng qua giftComboTracker phía trên).
+  if (roseFortuneAutoEnabled() && isRoseGift(giftObj, giftId)) {
+    enqueueRoseFortune({ user, uniqueId, avatar, source: eventSourceTag(uniqueId) }, deltaCount);
+  }
 }
 
-async function connectTikTokLive(usernameOrUrl) {
+async function connectTikTokLive(usernameOrUrl, { isAutoRetry = false } = {}) {
   const cleanUser = await resolveTikTokUsername(usernameOrUrl);
   if (!cleanUser) {
     throw new Error('Không tìm thấy @username hợp lệ từ dữ liệu nhập vào');
   }
 
   if (tiktokConn) {
+    // Đánh dấu "disconnect chủ ý" TRƯỚC khi dọn connection cũ — sự kiện 'disconnected' của
+    // nó có thể bắn ra NGAY TRONG LÚC await (đồng bộ trước khi Promise disconnect() resolve,
+    // vì listener dọn dẹp nội bộ của thư viện đăng ký SAU listener DISCONNECTED của ta), nên
+    // nếu không chặn trước, listener cũ (đóng closure username CŨ) sẽ kịp gọi
+    // scheduleTikTokReconnect() với tài khoản cũ trước khi dòng dưới kịp reset bộ đếm.
+    tiktokIntentionalDisconnect = true;
     try {
       await tiktokConn.disconnect();
     } catch (_) {}
     tiktokConn = null;
   }
+
+  // Mọi lệnh connect (thủ công từ Admin, auto-connect lúc boot, hoặc tự động retry) đều
+  // thể hiện ý định "muốn được kết nối" -> hủy cờ "disconnect chủ ý", đồng thời mở một
+  // "thế hệ" kết nối mới để các listener của kết nối CŨ (nếu còn sự kiện đang bay tới, ví
+  // dụ 'disconnected' từ việc gọi disconnect() dọn dẹp ở trên) tự biết mình đã lỗi thời và
+  // không ghi đè state hay lên lịch reconnect nhầm tài khoản.
+  // LƯU Ý: bộ đếm tiktokReconnectAttempts CHỈ reset khi đây là ý định kết nối MỚI thật sự
+  // (thủ công từ Admin / auto-connect lúc boot) — KHÔNG reset khi đây là chính lần tự động
+  // retry do scheduleTikTokReconnect() gọi vào (isAutoRetry=true), nếu không bộ đếm sẽ luôn
+  // về 0 trước khi kịp tăng, khiến giới hạn TIKTOK_MAX_AUTO_RECONNECTS không bao giờ có tác
+  // dụng và backoff không bao giờ tăng — lỗi thực tế đã gặp khi vận hành thật.
+  tiktokIntentionalDisconnect = false;
+  clearTikTokReconnectTimer();
+  if (!isAutoRetry) tiktokReconnectAttempts = 0;
+  const myGeneration = ++tiktokConnGeneration;
 
   state.tiktok = {
     connected: false,
@@ -1159,30 +1373,47 @@ async function connectTikTokLive(usernameOrUrl) {
   broadcastNotification('temple.state', getPublicState());
 
   tiktokConn = new TikTokLiveConnection(cleanUser, {
-    processInitialData: true,
+    // Chỉ tải "dữ liệu ban đầu" (vài bình luận/trạng thái phòng gần nhất) cho một kết nối
+    // MỚI thật sự — nếu bật cho cả các lần TỰ ĐỘNG KẾT NỐI LẠI, mỗi lần retry (có thể lặp
+    // lại nhiều lần liên tiếp khi dịch vụ ký TikTok đang gặp sự cố) sẽ tải lại và PHÁT LẠI
+    // CÙNG một lô bình luận/sự kiện CŨ như thể là sự kiện MỚI, cộng trùng công đức cho
+    // người xem nhiều lần — lỗi thực tế đã gặp (ReviewZone/Nammm/Châm Phạm bị cộng lặp lại
+    // mỗi ~15-18s trong lúc tự động retry) trước khi vá.
+    processInitialData: !isAutoRetry,
     fetchRoomInfoOnConnect: false,
     enableExtendedGiftInfo: false
   });
 
   tiktokConn.on(ControlEvent.CONNECTED, (roomState) => {
+    if (myGeneration !== tiktokConnGeneration) return;
+    tiktokReconnectAttempts = 0;
+    clearTikTokReconnectTimer();
     state.tiktok.connected = true;
     state.tiktok.connecting = false;
     state.tiktok.roomId = roomState?.roomId || tiktokConn?.roomId || null;
     state.tiktok.lastError = null;
-    console.log(`[TikTok Live] Đã kết nối phòng @${cleanUser} (roomId: ${state.tiktok.roomId})`);
+    logLine('INFO', 'TikTok', `Đã kết nối phòng @${cleanUser} (roomId: ${state.tiktok.roomId})`);
     broadcastNotification('temple.state', getPublicState());
   });
 
   tiktokConn.on(ControlEvent.DISCONNECTED, () => {
+    if (myGeneration !== tiktokConnGeneration) return;
     state.tiktok.connected = false;
     state.tiktok.connecting = false;
-    console.log(`[TikTok Live] Đã ngắt kết nối @${cleanUser}`);
+    logLine('WARN', 'TikTok', `Đã ngắt kết nối @${cleanUser}`);
     broadcastNotification('temple.state', getPublicState());
+    if (!tiktokIntentionalDisconnect) scheduleTikTokReconnect(cleanUser);
   });
 
   tiktokConn.on(ControlEvent.ERROR, (err) => {
-    state.tiktok.lastError = err?.message || String(err);
-    console.warn('[TikTok Live Warning]', state.tiktok.lastError);
+    if (myGeneration !== tiktokConnGeneration) return;
+    // Thư viện tiktok-live-connector bắn sự kiện 'error' với payload dạng { info, exception }
+    // (KHÔNG phải trực tiếp 1 Error), nên err?.message luôn undefined và String(err) cho ra
+    // "[object Object]" vô nghĩa — lỗi thực tế đã thấy trong log vận hành trước khi vá. Lấy
+    // đúng message từ err.exception (hoặc chính nó nếu đã là string) thay vì stringify cả object.
+    const detail = err?.exception?.message || err?.exception || err?.message || err;
+    state.tiktok.lastError = typeof detail === 'string' ? detail : JSON.stringify(detail);
+    logLine('WARN', 'TikTok', `Lỗi kết nối${err?.info ? ` (${err.info})` : ''}: ${state.tiktok.lastError}`);
     broadcastNotification('temple.state', getPublicState());
   });
 
@@ -1210,21 +1441,29 @@ async function connectTikTokLive(usernameOrUrl) {
 
   try {
     const roomState = await tiktokConn.connect();
+    if (myGeneration !== tiktokConnGeneration) return state.tiktok;
     state.tiktok.connected = true;
     state.tiktok.connecting = false;
     state.tiktok.roomId = roomState?.roomId || tiktokConn?.roomId || null;
     broadcastNotification('temple.state', getPublicState());
     return state.tiktok;
   } catch (err) {
+    if (myGeneration !== tiktokConnGeneration) throw err;
     state.tiktok.connected = false;
     state.tiktok.connecting = false;
     state.tiktok.lastError = err?.message || 'Không thể kết nối phòng Live (kiểm tra tài khoản đang phát Live chưa)';
+    logLine('ERROR', 'TikTok', `Kết nối @${cleanUser} thất bại: ${state.tiktok.lastError}`);
     broadcastNotification('temple.state', getPublicState());
+    scheduleTikTokReconnect(cleanUser);
     throw new Error(state.tiktok.lastError);
   }
 }
 
 function disconnectTikTokLive() {
+  tiktokIntentionalDisconnect = true;
+  clearTikTokReconnectTimer();
+  tiktokReconnectAttempts = 0;
+  tiktokConnGeneration += 1; // vô hiệu hóa listener của kết nối đang bị thay thế
   if (tiktokConn) {
     try {
       tiktokConn.disconnect();
@@ -1645,6 +1884,9 @@ function gracefulShutdown(signal) {
   logLine('INFO', 'System', `Nhận tín hiệu ${signal}, đang dừng dịch vụ an toàn...`);
 
   clearInterval(wsHeartbeatInterval);
+  tiktokIntentionalDisconnect = true;
+  clearTikTokReconnectTimer();
+  clearRoseFortuneTimer();
   clearInterval(giftComboCleanupInterval);
   clearTimeout(saveTimer);
 
